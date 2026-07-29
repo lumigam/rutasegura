@@ -1,0 +1,11 @@
+{
+  "appId": "org.placeat.rutasegura",
+  "appName": "Ruta Segura",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
