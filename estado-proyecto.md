@@ -81,6 +81,12 @@ App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuida
 - FCM (necesario para "ver ahora" y los avisos push de M4) no está configurado todavía.
 - El plan de arquitectura completo (M1 a M5, con las razones de cada decisión) sigue disponible en `C:\Users\lumig\.claude\plans\crystalline-floating-aho.md` si hace falta repasarlo.
 
+## Fallos reales encontrados tras el primer despliegue de M2
+
+- **El mapa salía en blanco (solo controles de zoom, sin teselas)**: la CSP de `helmet` en `server/index.ts` solo permitía `imgSrc`/`connectSrc` de `'self'`, así que el navegador bloqueaba en silencio las teselas de OpenStreetMap y las llamadas a Nominatim. **El servidor de desarrollo de Vite no aplica esta CSP** (solo existe cuando Express+helmet sirven la app), por eso no se detectó en las pruebas locales de esta sesión — para depurar bugs de red/CSP hay que probar contra el build servido por Express, no contra `vite dev`. Corregido ampliando `imgSrc` a `https://*.tile.openstreetmap.org` y `connectSrc` a `https://nominatim.openstreetmap.org`.
+- **Botón de cerrar sesión sin confirmar**: el avatar de arriba a la derecha cerraba sesión al instante (heredado literal de Pastillero); un usuario lo confundió con un menú. Ahora pide confirmación (`window.confirm`).
+- **Buscador de dirección en el editor de rutas**: se añadió un buscador de texto libre (calle + localidad, como Google Maps) sobre el mapa, usando Nominatim — permite ir directo al inicio de la ruta en vez de desplazar el mapa a mano.
+
 ## Cómo continuar en una nueva sesión
 
 1. Preguntar si ya se ha redesplegado el commit `b12bf7b` en Easypanel; si no, recordar al usuario que le dé a "Implementar".
