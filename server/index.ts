@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import webpush from 'web-push'
+import { decryptValue, encryptValue } from './crypto.js'
 
 const prisma = new PrismaClient()
 const app = express()
@@ -68,6 +69,21 @@ function consentRequired(req: AuthRequest, res: express.Response, next: express.
   if (!req.user?.privacyAcceptedAt || req.user.consentVersion !== CONSENT_VERSION) return res.status(403).json({ error: 'Debes aceptar la política de privacidad' })
   next()
 }
+function tutorOnly(req: AuthRequest, res: express.Response, next: express.NextFunction) {
+  if (req.user?.role !== Role.TUTOR) return res.status(403).json({ error: 'Acceso reservado a la persona tutora' })
+  next()
+}
+function usuarioOnly(req: AuthRequest, res: express.Response, next: express.NextFunction) {
+  if (req.user?.role !== Role.USUARIO) return res.status(403).json({ error: 'Acceso reservado a la persona usuaria' })
+  next()
+}
+function randomPairingCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  let code = ''
+  for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)]
+  return code
+}
+function decryptRoute<T extends { label: string }>(item: T) { return { ...item, label: decryptValue(item.label) } }
 
 app.get('/api/health', async (_req, res) => { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true, pushEnabled }) })
 app.post('/api/auth/register', async (req, res) => {
@@ -140,6 +156,109 @@ app.post('/api/notifications/subscribe', authenticate, consentRequired, async (r
     prisma.user.update({ where: { id: req.user!.id }, data: { timezone: parsed.data.timezone } }),
     prisma.pushSubscription.upsert({ where: { endpoint }, update: { p256dh: keys.p256dh, auth: keys.auth, userId: req.user!.id }, create: { endpoint, p256dh: keys.p256dh, auth: keys.auth, userId: req.user!.id } }),
   ])
+  res.json({ ok: true })
+})
+
+const pointSchema = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) })
+const routeSchema = z.object({
+  usuarioId: z.string().uuid(),
+  label: z.string().trim().min(1).max(140),
+  points: z.array(pointSchema).min(2).max(500),
+  corridorWidthMeters: z.number().int().min(10).max(500).default(75),
+})
+const routeUpdateSchema = z.object({
+  label: z.string().trim().min(1).max(140),
+  points: z.array(pointSchema).min(2).max(500),
+  corridorWidthMeters: z.number().int().min(10).max(500),
+  active: z.boolean(),
+})
+const scheduleSchema = z.object({
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  windowMinutesBefore: z.number().int().min(0).max(180).default(15),
+  windowMinutesAfter: z.number().int().min(0).max(180).default(45),
+  estimatedArrivalMinutes: z.number().int().min(1).max(240).nullable().default(null),
+  arrivalToleranceMinutes: z.number().int().min(5).max(120).default(20),
+  active: z.boolean().default(true),
+})
+
+app.post('/api/pairing/code', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
+  const code = randomPairingCode()
+  const expiresAt = new Date(Date.now() + 15 * 60_000)
+  await prisma.user.update({ where: { id: req.user!.id }, data: { pairingCode: code, pairingCodeExpiresAt: expiresAt } })
+  res.json({ code, expiresAt })
+})
+app.post('/api/pairing/claim', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const parsed = z.object({ code: z.string().trim().toUpperCase().length(6) }).safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Código no válido' })
+  const usuario = await prisma.user.findFirst({ where: { pairingCode: parsed.data.code, pairingCodeExpiresAt: { gt: new Date() }, role: Role.USUARIO } })
+  if (!usuario) return res.status(404).json({ error: 'El código no es válido o ha caducado' })
+  await prisma.$transaction([
+    prisma.link.upsert({ where: { tutorId_usuarioId: { tutorId: req.user!.id, usuarioId: usuario.id } }, update: {}, create: { tutorId: req.user!.id, usuarioId: usuario.id } }),
+    prisma.user.update({ where: { id: usuario.id }, data: { pairingCode: null, pairingCodeExpiresAt: null } }),
+  ])
+  res.json({ ok: true, usuario: { id: usuario.id, name: usuario.name } })
+})
+app.get('/api/pairing/links', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const links = await prisma.link.findMany({ where: { tutorId: req.user!.id }, include: { usuario: { select: { id: true, name: true, email: true } } } })
+  res.json(links.map(l => l.usuario))
+})
+
+app.get('/api/routes', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const routes = await prisma.route.findMany({ where: { tutorId: req.user!.id }, include: { schedules: true }, orderBy: { createdAt: 'asc' } })
+  res.json(routes.map(decryptRoute))
+})
+app.get('/api/routes/mine', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
+  const routes = await prisma.route.findMany({ where: { usuarioId: req.user!.id, active: true }, include: { schedules: true }, orderBy: { createdAt: 'asc' } })
+  res.json(routes.map(decryptRoute))
+})
+app.post('/api/routes', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const parsed = routeSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Datos de ruta no válidos', details: parsed.error.flatten() })
+  const link = await prisma.link.findUnique({ where: { tutorId_usuarioId: { tutorId: req.user!.id, usuarioId: parsed.data.usuarioId } } })
+  if (!link) return res.status(403).json({ error: 'Esa persona usuaria no está vinculada a tu cuenta' })
+  const route = await prisma.route.create({ data: {
+    tutorId: req.user!.id, usuarioId: parsed.data.usuarioId, label: encryptValue(parsed.data.label),
+    points: parsed.data.points, corridorWidthMeters: parsed.data.corridorWidthMeters,
+  }, include: { schedules: true } })
+  res.status(201).json(decryptRoute(route))
+})
+app.patch('/api/routes/:id', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const parsed = routeUpdateSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Datos de ruta no válidos', details: parsed.error.flatten() })
+  const existing = await prisma.route.findFirst({ where: { id: String(req.params.id), tutorId: req.user!.id } })
+  if (!existing) return res.status(404).json({ error: 'Ruta no encontrada' })
+  const route = await prisma.route.update({ where: { id: existing.id }, data: {
+    label: encryptValue(parsed.data.label), points: parsed.data.points,
+    corridorWidthMeters: parsed.data.corridorWidthMeters, active: parsed.data.active,
+  }, include: { schedules: true } })
+  res.json(decryptRoute(route))
+})
+app.delete('/api/routes/:id', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  await prisma.route.deleteMany({ where: { id: String(req.params.id), tutorId: req.user!.id } })
+  res.json({ ok: true })
+})
+
+app.post('/api/routes/:routeId/schedules', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const parsed = scheduleSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Datos de horario no válidos', details: parsed.error.flatten() })
+  const route = await prisma.route.findFirst({ where: { id: String(req.params.routeId), tutorId: req.user!.id } })
+  if (!route) return res.status(404).json({ error: 'Ruta no encontrada' })
+  const schedule = await prisma.schedule.create({ data: { routeId: route.id, ...parsed.data } })
+  res.status(201).json(schedule)
+})
+app.patch('/api/schedules/:id', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const parsed = scheduleSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Datos de horario no válidos', details: parsed.error.flatten() })
+  const existing = await prisma.schedule.findFirst({ where: { id: String(req.params.id), route: { tutorId: req.user!.id } } })
+  if (!existing) return res.status(404).json({ error: 'Horario no encontrado' })
+  const schedule = await prisma.schedule.update({ where: { id: existing.id }, data: parsed.data })
+  res.json(schedule)
+})
+app.delete('/api/schedules/:id', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const existing = await prisma.schedule.findFirst({ where: { id: String(req.params.id), route: { tutorId: req.user!.id } } })
+  if (!existing) return res.status(404).json({ error: 'Horario no encontrado' })
+  await prisma.schedule.delete({ where: { id: existing.id } })
   res.json({ ok: true })
 })
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { BrandMark } from './icons'
 import type { UserAccount } from './types'
 
 export type LegalKind = 'aviso-legal' | 'privacidad' | 'cookies' | 'eliminar-cuenta'
@@ -15,7 +16,7 @@ const Entity = () => <><strong>PLACEAT Plena Inclusión</strong>, CIF G10012136,
 export function LegalPage({ kind }: { kind: LegalKind }) {
   const titles = { 'aviso-legal': 'Aviso legal', privacidad: 'Política de privacidad', cookies: 'Política de cookies', 'eliminar-cuenta': 'Eliminar una cuenta' }
   return <div className="legal-shell">
-    <header className="legal-header"><a href="/" className="legal-brand"><img src="/icons/icon-192.png" alt="" /><span><strong>Ruta</strong><small>SEGURA</small></span></a><a href="/">Volver a la aplicación</a></header>
+    <header className="legal-header"><a href="/" className="legal-brand"><BrandMark width={40} height={40} /><span><strong>Ruta</strong><small>SEGURA</small></span></a><a href="/">Volver a la aplicación</a></header>
     <main className="legal-page">
       <p className="eyebrow">INFORMACIÓN LEGAL</p><h1>{titles[kind]}</h1><p className="legal-updated">Última actualización: 29 de julio de 2026</p>
       {kind === 'aviso-legal' && <AvisoLegal />}
@@ -113,5 +114,5 @@ export function CookieBanner() {
 
 export function ConsentScreen({ user, onConsent, onAccepted }: { user: UserAccount, onConsent: () => Promise<UserAccount>, onAccepted: (user: UserAccount) => void }) {
   const [privacy, setPrivacy] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('')
-  return <main className="consent-page"><section><img src="/icons/icon-192.png" alt="" /><p className="eyebrow">ANTES DE CONTINUAR</p><h1>Protejamos la ubicación</h1><p>Ruta Segura guarda información sobre rutas, horarios y avisos de ubicación de la persona usuaria, que tratamos con especial cuidado. Necesitamos confirmar que comprendes y autorizas este uso.</p><label className="legal-check"><input type="checkbox" checked={privacy} onChange={e => setPrivacy(e.target.checked)} /><span>He leído la <a href="/privacidad" target="_blank">política de privacidad</a> y entiendo que esta cuenta permite programar rutas y horarios, y recibir avisos de salida, llegada y desvío basados en la ubicación de la persona usuaria. Doy mi <strong>consentimiento explícito</strong> para este tratamiento. Si actúo en nombre de otra persona (por ejemplo, como tutor/a o representante legal), declaro estar autorizado/a.</span></label>{error && <div className="form-error">{error}</div>}<button className="primary" disabled={!privacy || busy} onClick={async () => { setBusy(true); setError(''); try { onAccepted(await onConsent()) } catch { setError('No se pudo guardar el consentimiento') } finally { setBusy(false) } }}>{busy ? 'Guardando…' : 'Aceptar y continuar'}</button><LegalFooter /></section></main>
+  return <main className="consent-page"><section><BrandMark width={52} height={52} /><p className="eyebrow">ANTES DE CONTINUAR</p><h1>Protejamos la ubicación</h1><p>Ruta Segura guarda información sobre rutas, horarios y avisos de ubicación de la persona usuaria, que tratamos con especial cuidado. Necesitamos confirmar que comprendes y autorizas este uso.</p><label className="legal-check"><input type="checkbox" checked={privacy} onChange={e => setPrivacy(e.target.checked)} /><span>He leído la <a href="/privacidad" target="_blank">política de privacidad</a> y entiendo que esta cuenta permite programar rutas y horarios, y recibir avisos de salida, llegada y desvío basados en la ubicación de la persona usuaria. Doy mi <strong>consentimiento explícito</strong> para este tratamiento. Si actúo en nombre de otra persona (por ejemplo, como tutor/a o representante legal), declaro estar autorizado/a.</span></label>{error && <div className="form-error">{error}</div>}<button className="primary" disabled={!privacy || busy} onClick={async () => { setBusy(true); setError(''); try { onAccepted(await onConsent()) } catch { setError('No se pudo guardar el consentimiento') } finally { setBusy(false) } }}>{busy ? 'Guardando…' : 'Aceptar y continuar'}</button><LegalFooter /></section></main>
 }

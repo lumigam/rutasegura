@@ -1,4 +1,4 @@
-import type { UserAccount } from './types'
+import type { LinkedUsuario, Route, Schedule, UserAccount } from './types'
 import { Capacitor } from '@capacitor/core'
 
 const TOKEN_KEY = 'rutasegura:session-token:v1'
@@ -67,3 +67,20 @@ export async function exportAccountData() {
   link.href = url; link.download = `ruta-segura-datos-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url)
 }
 export const deleteOwnAccount = (password: string) => request<{ ok: boolean }>('/api/account', { method: 'DELETE', body: JSON.stringify({ password }) }).then(() => undefined)
+
+export const generatePairingCode = () => request<{ code: string, expiresAt: string }>('/api/pairing/code', { method: 'POST' })
+export const claimPairingCode = (code: string) => request<{ ok: boolean, usuario: LinkedUsuario }>('/api/pairing/claim', { method: 'POST', body: JSON.stringify({ code }) })
+export const loadLinkedUsuarios = () => request<LinkedUsuario[]>('/api/pairing/links')
+
+export const loadRoutes = () => request<Route[]>('/api/routes')
+export const loadMyRoutes = () => request<Route[]>('/api/routes/mine')
+export type RouteInput = { usuarioId: string, label: string, points: { lat: number, lng: number }[], corridorWidthMeters: number }
+export type RouteUpdateInput = { label: string, points: { lat: number, lng: number }[], corridorWidthMeters: number, active: boolean }
+export const createRoute = (data: RouteInput) => request<Route>('/api/routes', { method: 'POST', body: JSON.stringify(data) })
+export const updateRoute = (id: string, data: RouteUpdateInput) => request<Route>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+export const deleteRoute = (id: string) => request<{ ok: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }).then(() => undefined)
+
+export type ScheduleInput = Omit<Schedule, 'id' | 'routeId'>
+export const createSchedule = (routeId: string, data: ScheduleInput) => request<Schedule>(`/api/routes/${routeId}/schedules`, { method: 'POST', body: JSON.stringify(data) })
+export const updateSchedule = (id: string, data: ScheduleInput) => request<Schedule>(`/api/schedules/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+export const deleteSchedule = (id: string) => request<{ ok: boolean }>(`/api/schedules/${id}`, { method: 'DELETE' }).then(() => undefined)

@@ -1,0 +1,267 @@
+import { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import { Check, ChevronRight, MapPin, Plus, Trash2, X } from './icons'
+import {
+  claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
+  generatePairingCode, loadLinkedUsuarios, loadMyRoutes, loadRoutes, updateRoute, updateSchedule,
+  type ScheduleInput,
+} from './storage'
+import type { LatLng, LinkedUsuario, Route, Schedule, UserAccount, Weekday } from './types'
+
+const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+const ALL_DAYS: Weekday[] = [0, 1, 2, 3, 4, 5, 6]
+const PLASENCIA: LatLng = { lat: 40.0298, lng: -6.0844 }
+
+function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { points: LatLng[], corridorWidthMeters: number, editable: boolean, onAddPoint?: (point: LatLng) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<L.Map | null>(null)
+  const layerRef = useRef<L.LayerGroup | null>(null)
+  const onAddPointRef = useRef(onAddPoint)
+  onAddPointRef.current = onAddPoint
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return
+    const map = L.map(containerRef.current, { center: [PLASENCIA.lat, PLASENCIA.lng], zoom: 14 })
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map)
+    layerRef.current = L.layerGroup().addTo(map)
+    map.on('click', (event: L.LeafletMouseEvent) => onAddPointRef.current?.({ lat: event.latlng.lat, lng: event.latlng.lng }))
+    mapRef.current = map
+    return () => { map.remove(); mapRef.current = null }
+  }, [])
+
+  useEffect(() => {
+    const map = mapRef.current, layer = layerRef.current
+    if (!map || !layer) return
+    layer.clearLayers()
+    if (points.length) {
+      const latlngs = points.map(p => [p.lat, p.lng]) as [number, number][]
+      if (points.length > 1) L.polyline(latlngs, { color: '#3f74b3', weight: 4, opacity: .85 }).addTo(layer)
+      points.forEach(p => L.circle([p.lat, p.lng], { radius: corridorWidthMeters, color: '#3f74b3', weight: 1, opacity: .35, fillOpacity: .08 }).addTo(layer))
+      if (points.length > 1) map.fitBounds(latlngs, { padding: [30, 30] })
+      else map.setView(latlngs[0], 15)
+    }
+  }, [points, corridorWidthMeters])
+
+  return <div ref={containerRef} className="route-map" style={{ cursor: editable ? 'crosshair' : 'grab' }} />
+}
+
+export function PairingCard({ role, onLinked }: { role: UserAccount['role'], onLinked?: () => void }) {
+  const [code, setCode] = useState('')
+  const [generated, setGenerated] = useState<{ code: string, expiresAt: string } | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  if (role === 'USUARIO') {
+    const generate = async () => {
+      setBusy(true); setError('')
+      try { setGenerated(await generatePairingCode()) }
+      catch { setError('No se pudo generar el código') }
+      finally { setBusy(false) }
+    }
+    return <section className="profile-card">
+      <h2>Código para tu tutor/a</h2>
+      <p>Compártelo con la persona que va a programar tu ruta. Caduca a los 15 minutos.</p>
+      {generated
+        ? <div className="pairing-code">{generated.code}</div>
+        : <button className="secondary-button" disabled={busy} onClick={generate}>{busy ? 'Generando…' : 'Generar código'}</button>}
+      {generated && <button className="text-link" onClick={generate}>Generar otro código</button>}
+      {error && <div className="form-error">{error}</div>}
+    </section>
+  }
+
+  const claim = async (event: React.FormEvent) => {
+    event.preventDefault(); setBusy(true); setError('')
+    try { await claimPairingCode(code); setCode(''); onLinked?.() }
+    catch { setError('El código no es válido o ha caducado') }
+    finally { setBusy(false) }
+  }
+  return <section className="profile-card">
+    <h2>Vincular a una persona usuaria</h2>
+    <p>Pide el código de 6 caracteres que aparece en su aplicación.</p>
+    <form onSubmit={claim}>
+      <label>Código<input required maxLength={6} value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="AB12CD" style={{ textTransform: 'uppercase', letterSpacing: '2px' }} /></label>
+      {error && <div className="form-error">{error}</div>}
+      <button className="primary" disabled={code.length < 6 || busy}>{busy ? 'Vinculando…' : 'Vincular'}</button>
+    </form>
+  </section>
+}
+
+export function RoutesView() {
+  const [usuarios, setUsuarios] = useState<LinkedUsuario[]>([])
+  const [routes, setRoutes] = useState<Route[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [editing, setEditing] = useState<Route | 'new' | null>(null)
+  const [error, setError] = useState('')
+
+  const refresh = () => Promise.all([loadLinkedUsuarios(), loadRoutes()]).then(([u, r]) => { setUsuarios(u); setRoutes(r); setLoaded(true) })
+  useEffect(() => { refresh().catch(() => setError('No se pudieron cargar las rutas')) }, [])
+
+  return <div className="page inner-page">
+    <div className="inner-heading">
+      <div><p className="eyebrow">TUTOR/A</p><h1>Rutas</h1><p>Programa el camino y el horario habituales.</p></div>
+      {usuarios.length > 0 && <button className="primary compact" onClick={() => setEditing('new')}><Plus /> Añadir</button>}
+    </div>
+    {error && <div className="form-error">{error}</div>}
+    <PairingCard role="TUTOR" onLinked={refresh} />
+    {loaded && usuarios.length === 0 && <p className="lede-note">Vincula primero a una persona usuaria para poder crear una ruta.</p>}
+    {routes.length > 0 && <div className="route-list">
+      {routes.map(route => <button className="route-row" key={route.id} onClick={() => setEditing(route)}>
+        <span className="route-row-icon"><MapPin /></span>
+        <span className="route-row-text"><strong>{route.label}</strong><small>{usuarios.find(u => u.id === route.usuarioId)?.name ?? 'Persona usuaria'} · {route.schedules.length ? `${route.schedules.length} horario(s)` : 'Sin horario'}</small></span>
+        <ChevronRight />
+      </button>)}
+    </div>}
+    {loaded && routes.length === 0 && usuarios.length > 0 && <div className="large-empty"><MapPin /><h2>Aún no hay rutas</h2><p>Añade la primera para empezar a recibir avisos.</p><button className="primary" onClick={() => setEditing('new')}><Plus /> Añadir ruta</button></div>}
+    {editing && <RouteEditor initial={editing === 'new' ? null : editing} usuarios={usuarios} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); refresh() }} />}
+  </div>
+}
+
+function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route | null, usuarios: LinkedUsuario[], onClose: () => void, onSaved: () => void }) {
+  const [usuarioId, setUsuarioId] = useState(initial?.usuarioId ?? usuarios[0]?.id ?? '')
+  const [label, setLabel] = useState(initial?.label ?? '')
+  const [points, setPoints] = useState<LatLng[]>(initial?.points ?? [])
+  const [corridorWidthMeters, setCorridorWidthMeters] = useState(initial?.corridorWidthMeters ?? 75)
+  const [active, setActive] = useState(initial?.active ?? true)
+  const [schedules, setSchedules] = useState<Schedule[]>(initial?.schedules ?? [])
+  const [savedRouteId, setSavedRouteId] = useState<string | null>(initial?.id ?? null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const addPoint = (point: LatLng) => setPoints(current => [...current, point])
+  const undoPoint = () => setPoints(current => current.slice(0, -1))
+  const clearPoints = () => setPoints([])
+
+  const saveRoute = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!usuarioId) { setError('Selecciona a la persona usuaria'); return }
+    if (points.length < 2) { setError('Dibuja al menos dos puntos en el mapa'); return }
+    setBusy(true); setError('')
+    try {
+      const saved = savedRouteId
+        ? await updateRoute(savedRouteId, { label, points, corridorWidthMeters, active })
+        : await createRoute({ usuarioId, label, points, corridorWidthMeters })
+      setSavedRouteId(saved.id)
+      setSchedules(saved.schedules)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo guardar la ruta') }
+    finally { setBusy(false) }
+  }
+
+  const removeRoute = async () => {
+    if (!savedRouteId || !window.confirm('¿Eliminar esta ruta y sus horarios?')) return
+    await deleteRoute(savedRouteId)
+    onSaved()
+  }
+
+  return <div className="modal-backdrop" role="presentation"><div className="sheet route-sheet" role="dialog" aria-modal="true" aria-labelledby="route-title">
+    <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">RUTA</p><h1 id="route-title">{initial ? 'Editar ruta' : 'Nueva ruta'}</h1></div><span /></div>
+    <div className="route-editor-body">
+      <RouteMap points={points} corridorWidthMeters={corridorWidthMeters} editable onAddPoint={addPoint} />
+      <div className="route-map-actions">
+        <button type="button" className="text-button" onClick={undoPoint} disabled={!points.length}>Deshacer último punto</button>
+        <button type="button" className="text-button" onClick={clearPoints} disabled={!points.length}>Borrar ruta dibujada</button>
+      </div>
+      <form onSubmit={saveRoute}>
+        <label>Nombre de la ruta<input required value={label} onChange={e => setLabel(e.target.value)} placeholder="Ej. Centro de día → Casa" /></label>
+        <label>Persona usuaria<select required value={usuarioId} onChange={e => setUsuarioId(e.target.value)} disabled={Boolean(savedRouteId)}>
+          <option value="" disabled>Selecciona…</option>
+          {usuarios.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select></label>
+        <label>Ancho del margen de seguridad (metros)<input required type="number" min={10} max={500} value={corridorWidthMeters} onChange={e => setCorridorWidthMeters(Number(e.target.value))} /></label>
+        {savedRouteId && <label className="switch-row"><span><strong>Ruta activa</strong><small>Una ruta pausada no genera avisos</small></span><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} /><i /></label>}
+        {error && <div className="form-error">{error}</div>}
+        <div className="form-actions">
+          <button className="primary" type="submit" disabled={busy}><Check /> {busy ? 'Guardando…' : 'Guardar ruta'}</button>
+          {savedRouteId && <button className="danger" type="button" onClick={removeRoute}><Trash2 /> Eliminar ruta</button>}
+        </div>
+      </form>
+      {savedRouteId && <SchedulesEditor routeId={savedRouteId} schedules={schedules} onChange={setSchedules} />}
+    </div>
+  </div></div>
+}
+
+function SchedulesEditor({ routeId, schedules, onChange }: { routeId: string, schedules: Schedule[], onChange: (s: Schedule[]) => void }) {
+  const [editing, setEditing] = useState<Schedule | 'new' | null>(null)
+  const [error, setError] = useState('')
+
+  const remove = async (id: string) => {
+    if (!window.confirm('¿Eliminar este horario?')) return
+    try { await deleteSchedule(id); onChange(schedules.filter(s => s.id !== id)) }
+    catch { setError('No se pudo eliminar el horario') }
+  }
+
+  return <div className="schedules-block">
+    <div className="inner-heading" style={{ marginBottom: 16 }}>
+      <div><p className="eyebrow">HORARIOS</p><h2 style={{ margin: 0, fontSize: 20 }}>Cuándo se hace esta ruta</h2></div>
+      <button type="button" className="primary compact" onClick={() => setEditing('new')}><Plus /> Añadir horario</button>
+    </div>
+    {error && <div className="form-error">{error}</div>}
+    <div className="schedule-list">
+      {schedules.map(schedule => <div className="schedule-row" key={schedule.id}>
+        <div><strong>{schedule.time}</strong><span>{schedule.days.length === 7 ? 'Todos los días' : schedule.days.map(d => DAY_NAMES[d]).join(', ')}</span></div>
+        {schedule.estimatedArrivalMinutes != null && <span className="schedule-note">Avisa si no llega en {schedule.estimatedArrivalMinutes + schedule.arrivalToleranceMinutes} min</span>}
+        <div className="schedule-actions">
+          <button type="button" onClick={() => setEditing(schedule)} aria-label="Editar horario"><ChevronRight /></button>
+          <button type="button" onClick={() => remove(schedule.id)} aria-label="Eliminar horario"><Trash2 /></button>
+        </div>
+      </div>)}
+      {!schedules.length && <p className="lede-note">Todavía no hay ningún horario para esta ruta.</p>}
+    </div>
+    {editing && <ScheduleForm routeId={routeId} initial={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={saved => {
+      onChange(editing === 'new' ? [...schedules, saved] : schedules.map(s => s.id === saved.id ? saved : s))
+      setEditing(null)
+    }} />}
+  </div>
+}
+
+function ScheduleForm({ routeId, initial, onClose, onSaved }: { routeId: string, initial: Schedule | null, onClose: () => void, onSaved: (s: Schedule) => void }) {
+  const [days, setDays] = useState<Weekday[]>(initial?.days ?? [1, 2, 3, 4, 5])
+  const [time, setTime] = useState(initial?.time ?? '18:00')
+  const [estimatedArrivalMinutes, setEstimatedArrivalMinutes] = useState<string>(initial?.estimatedArrivalMinutes != null ? String(initial.estimatedArrivalMinutes) : '')
+  const [arrivalToleranceMinutes, setArrivalToleranceMinutes] = useState(initial?.arrivalToleranceMinutes ?? 20)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const toggleDay = (day: Weekday) => setDays(current => current.includes(day) ? current.filter(d => d !== day) : [...current, day].sort())
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!days.length) { setError('Selecciona al menos un día'); return }
+    setBusy(true); setError('')
+    const data: ScheduleInput = {
+      days, time, windowMinutesBefore: 15, windowMinutesAfter: 45,
+      estimatedArrivalMinutes: estimatedArrivalMinutes ? Number(estimatedArrivalMinutes) : null,
+      arrivalToleranceMinutes, active: true,
+    }
+    try { onSaved(initial ? await updateSchedule(initial.id, data) : await createSchedule(routeId, data)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo guardar el horario') }
+    finally { setBusy(false) }
+  }
+
+  return <div className="modal-backdrop" role="presentation"><div className="sheet schedule-sheet" role="dialog" aria-modal="true" aria-labelledby="schedule-title">
+    <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">HORARIO</p><h1 id="schedule-title">{initial ? 'Editar horario' : 'Nuevo horario'}</h1></div><span /></div>
+    <form onSubmit={submit}>
+      <fieldset><legend>Días</legend><div className="days">{ALL_DAYS.map(day => <button type="button" key={day} className={days.includes(day) ? 'selected' : ''} onClick={() => toggleDay(day)}>{DAY_NAMES[day]}</button>)}</div></fieldset>
+      <label>Hora de salida<input required type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
+      <label>Duración estimada del trayecto en minutos (opcional)<input type="number" min={1} max={240} value={estimatedArrivalMinutes} onChange={e => setEstimatedArrivalMinutes(e.target.value)} placeholder="Ej. 20" /></label>
+      {estimatedArrivalMinutes && <label>Avisar si tarda más de (minutos extra)<input type="number" min={5} max={120} value={arrivalToleranceMinutes} onChange={e => setArrivalToleranceMinutes(Number(e.target.value))} /></label>}
+      {error && <div className="form-error">{error}</div>}
+      <button className="primary" type="submit" disabled={busy}><Check /> {busy ? 'Guardando…' : 'Guardar horario'}</button>
+    </form>
+  </div></div>
+}
+
+export function UsuarioRoutes() {
+  const [routes, setRoutes] = useState<Route[]>([])
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => { loadMyRoutes().then(r => { setRoutes(r); setLoaded(true) }).catch(() => setLoaded(true)) }, [])
+
+  return <div className="usuario-routes">
+    <PairingCard role="USUARIO" />
+    {loaded && routes.length > 0 && <div className="route-list">
+      {routes.map(route => <div className="route-row" key={route.id}>
+        <span className="route-row-icon"><MapPin /></span>
+        <span className="route-row-text"><strong>{route.label}</strong><small>{route.schedules.length ? route.schedules.map(s => `${s.time} · ${s.days.length === 7 ? 'todos los días' : s.days.map(d => DAY_NAMES[d]).join(', ')}`).join(' · ') : 'Sin horario todavía'}</small></span>
+      </div>)}
+    </div>}
+  </div>
+}

@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { BellRing, ChevronRight, Home as HomeIcon, MapPin, ShieldCheck, Trash2 } from './icons'
+import { BrandMark, ChevronRight, Home as HomeIcon, MapPin, ShieldCheck, Trash2 } from './icons'
 import { ApiError, acceptLegalConsent, currentUser, deleteOwnAccount, exportAccountData, login, logout, register } from './storage'
 import { ConsentScreen, CookieBanner, LegalFooter, LegalPage, legalKindFromPath } from './Legal'
+import { RoutesView, UsuarioRoutes } from './Routes'
 import { LEGAL_CONSENT_VERSION, type UserAccount } from './types'
 
-type Tab = 'home' | 'profile'
+type Tab = 'home' | 'routes' | 'profile'
 
 function App() {
   const legalKind = legalKindFromPath(window.location.pathname)
@@ -15,7 +16,7 @@ function App() {
   useEffect(() => { currentUser().then(setUser).finally(() => setAuthLoading(false)) }, [])
 
   if (legalKind) return <LegalPage kind={legalKind} />
-  if (authLoading) return <><div className="auth-loading"><span className="brand-mark"><MapPin /></span><strong>Ruta Segura</strong></div><CookieBanner /></>
+  if (authLoading) return <><div className="auth-loading"><span className="brand-mark"><BrandMark /></span><strong>Ruta Segura</strong></div><CookieBanner /></>
   if (!user) return <><AuthScreen onAuthenticated={setUser} /><LegalFooter /><CookieBanner /></>
   if (!user.privacyAcceptedAt || user.consentVersion !== LEGAL_CONSENT_VERSION) return <><ConsentScreen user={user} onConsent={acceptLegalConsent} onAccepted={setUser} /><CookieBanner /></>
 
@@ -25,7 +26,7 @@ function App() {
   return <div className="app-shell">
     <header className="topbar">
       <button className="brand" onClick={() => setTab('home')} aria-label="Ir al inicio">
-        <span className="brand-mark"><MapPin width={22} height={22} /></span>
+        <span className="brand-mark"><BrandMark width={26} height={26} /></span>
         <span><strong>Ruta</strong><small>SEGURA</small></span>
       </button>
       <button className="profile" onClick={signOut} aria-label="Cerrar sesión" title="Cerrar sesión"><span>{user.name}</span><div>{initials}</div></button>
@@ -33,11 +34,13 @@ function App() {
 
     <main>
       {tab === 'home' && <HomeView user={user} />}
+      {tab === 'routes' && user.role === 'TUTOR' && <RoutesView />}
       {tab === 'profile' && <ProfileView user={user} onDeleted={signOut} />}
     </main>
 
     <nav className="bottom-nav" aria-label="Navegación principal">
       <NavButton active={tab === 'home'} icon={<HomeIcon />} label="Inicio" onClick={() => setTab('home')} />
+      {user.role === 'TUTOR' && <NavButton active={tab === 'routes'} icon={<MapPin />} label="Rutas" onClick={() => setTab('routes')} />}
       <NavButton active={tab === 'profile'} icon={<ShieldCheck />} label="Mi perfil" onClick={() => setTab('profile')} />
     </nav>
 
@@ -67,12 +70,10 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: UserAccount) 
   }
   return <main className="auth-page">
     <section className="auth-intro">
-      <div className="auth-brand"><span className="brand-mark"><MapPin /></span><span><strong>Ruta</strong><small>SEGURA</small></span></div>
-      <p className="eyebrow">RUTAS Y HORARIOS CON TRANQUILIDAD</p>
-      <h1>Un aviso claro cuando sale, cuando llega y si se desvía del camino.</h1>
-      <p>Programa la ruta y el horario habituales, y recibe avisos pensados para dar tranquilidad a toda la familia.</p>
-      <div className="auth-benefit"><BellRing /><span><strong>Avisos de salida, llegada y desvío</strong><small>Imposibles de pasar por alto</small></span></div>
-      <div className="auth-benefit"><ShieldCheck /><span><strong>Ubicación tratada con cuidado</strong><small>Sin guardar un historial permanente de trayectos</small></span></div>
+      <div className="auth-brand"><span className="brand-mark"><BrandMark width={44} height={44} /></span><span><strong>Ruta</strong><small>SEGURA</small></span></div>
+      <p className="eyebrow">PLACEAT · RUTA SEGURA</p>
+      <h1>Tranquilidad en cada trayecto.</h1>
+      <p>Programa la ruta y el horario de siempre. Te avisamos cuando sale, cuando llega y si se aparta del camino.</p>
     </section>
     <section className="auth-card">
       <p className="eyebrow">{mode === 'login' ? 'BIENVENIDO DE NUEVO' : 'CREAR UNA CUENTA'}</p>
@@ -101,15 +102,10 @@ function HomeView({ user }: { user: UserAccount }) {
       <p className="eyebrow">{user.role === 'TUTOR' ? 'PANEL DE TUTOR/A' : 'MI RUTA'}</p>
       <h1>Hola, {user.name.split(' ')[0]}</h1>
       <p>{user.role === 'TUTOR'
-        ? 'Todavía no has programado ninguna ruta.'
-        : 'Tu tutor/a todavía no ha programado ninguna ruta para ti.'}</p>
+        ? 'Ve a "Rutas" para vincular a una persona usuaria y programar su camino.'
+        : 'Aquí verás el estado de tu ruta y podrás generar tu código de vinculación.'}</p>
     </section>
-    <div className="alerts-ready" role="status">
-      <MapPin />
-      <span><strong>Próximamente</strong><small>{user.role === 'TUTOR'
-        ? 'Aquí podrás dibujar la ruta, elegir el horario y ver los avisos de salida, llegada y desvío.'
-        : 'Aquí verás el estado de tu ruta programada.'}</small></span>
-    </div>
+    {user.role === 'USUARIO' && <UsuarioRoutes />}
   </div>
 }
 
