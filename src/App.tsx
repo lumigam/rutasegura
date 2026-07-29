@@ -20,7 +20,10 @@ function App() {
   if (!user) return <><AuthScreen onAuthenticated={setUser} /><LegalFooter /><CookieBanner /></>
   if (!user.privacyAcceptedAt || user.consentVersion !== LEGAL_CONSENT_VERSION) return <><ConsentScreen user={user} onConsent={acceptLegalConsent} onAccepted={setUser} /><CookieBanner /></>
 
-  const signOut = () => { logout(); setUser(null); setTab('home') }
+  const signOut = () => {
+    if (!window.confirm('¿Cerrar sesión?')) return
+    logout(); setUser(null); setTab('home')
+  }
   const initials = user.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase()
 
   return <div className="app-shell">
