@@ -87,6 +87,15 @@ App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuida
 - **Botón de cerrar sesión sin confirmar**: el avatar de arriba a la derecha cerraba sesión al instante (heredado literal de Pastillero); un usuario lo confundió con un menú. Ahora pide confirmación (`window.confirm`).
 - **Buscador de dirección en el editor de rutas**: se añadió un buscador de texto libre (calle + localidad, como Google Maps) sobre el mapa, usando Nominatim — permite ir directo al inicio de la ruta en vez de desplazar el mapa a mano.
 
+## Pendiente de revisar mañana: el mapa sigue sin funcionar tras el fix de CSP
+
+Tras desplegar `b5468cb` (el que amplía `imgSrc`/`connectSrc` en la CSP), el usuario confirma que el buscador de dirección ya aparece (o sea, el frontend nuevo está desplegado), **pero el mapa en sí sigue sin funcionar**. No se ha diagnosticado todavía por qué. Primera hipótesis a comprobar mañana, de más a menos probable:
+
+1. **Caché del navegador**: si el documento HTML se sirvió y cacheó antes del despliegue del fix, el navegador podría seguir usando esa respuesta cacheada (con la CSP antigua) hasta un refresco forzado (Ctrl+Shift+R) o una pestaña de incógnito. Probar esto primero, es lo más rápido de descartar.
+2. Revisar la cabecera `Content-Security-Policy` real que devuelve `rutasegura.placeat.org` (con las herramientas de red del navegador o `curl -I`) y comprobar que efectivamente incluye `https://*.tile.openstreetmap.org` en `img-src` y `https://nominatim.openstreetmap.org` en `connect-src` — confirmar que el despliegue realmente recogió el commit `b5468cb`/`1dbaba8` y no una imagen Docker en caché.
+3. Si la CSP ya es correcta y sigue sin verse: mirar la consola del navegador en la propia página (no solo en local) para ver si hay un error distinto (por ejemplo, un fallo de red real, un bloqueador de contenido/adblock del propio dispositivo bloqueando `tile.openstreetmap.org`, o un problema con el tamaño del contenedor del mapa si el modal no ha terminado de montar cuando Leaflet mide el `<div>`).
+4. Recordar que en local (`vite dev`) esto nunca se puede reproducir porque no hay CSP — cualquier prueba real tiene que hacerse contra el despliegue de Easypanel.
+
 ## Cómo continuar en una nueva sesión
 
 1. Preguntar si ya se ha redesplegado el commit `b12bf7b` en Easypanel; si no, recordar al usuario que le dé a "Implementar".
