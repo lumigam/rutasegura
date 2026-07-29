@@ -87,18 +87,12 @@ App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuida
 - **Botón de cerrar sesión sin confirmar**: el avatar de arriba a la derecha cerraba sesión al instante (heredado literal de Pastillero); un usuario lo confundió con un menú. Ahora pide confirmación (`window.confirm`).
 - **Buscador de dirección en el editor de rutas**: se añadió un buscador de texto libre (calle + localidad, como Google Maps) sobre el mapa, usando Nominatim — permite ir directo al inicio de la ruta en vez de desplazar el mapa a mano.
 
-## Pendiente de revisar mañana: el mapa sigue sin funcionar tras el fix de CSP
+## Resuelto: el mapa no se veía tras el fix de CSP por caché del navegador
 
-Tras desplegar `b5468cb` (el que amplía `imgSrc`/`connectSrc` en la CSP), el usuario confirma que el buscador de dirección ya aparece (o sea, el frontend nuevo está desplegado), **pero el mapa en sí sigue sin funcionar**. No se ha diagnosticado todavía por qué. Primera hipótesis a comprobar mañana, de más a menos probable:
-
-1. **Caché del navegador**: si el documento HTML se sirvió y cacheó antes del despliegue del fix, el navegador podría seguir usando esa respuesta cacheada (con la CSP antigua) hasta un refresco forzado (Ctrl+Shift+R) o una pestaña de incógnito. Probar esto primero, es lo más rápido de descartar.
-2. Revisar la cabecera `Content-Security-Policy` real que devuelve `rutasegura.placeat.org` (con las herramientas de red del navegador o `curl -I`) y comprobar que efectivamente incluye `https://*.tile.openstreetmap.org` en `img-src` y `https://nominatim.openstreetmap.org` en `connect-src` — confirmar que el despliegue realmente recogió el commit `b5468cb`/`1dbaba8` y no una imagen Docker en caché.
-3. Si la CSP ya es correcta y sigue sin verse: mirar la consola del navegador en la propia página (no solo en local) para ver si hay un error distinto (por ejemplo, un fallo de red real, un bloqueador de contenido/adblock del propio dispositivo bloqueando `tile.openstreetmap.org`, o un problema con el tamaño del contenedor del mapa si el modal no ha terminado de montar cuando Leaflet mide el `<div>`).
-4. Recordar que en local (`vite dev`) esto nunca se puede reproducir porque no hay CSP — cualquier prueba real tiene que hacerse contra el despliegue de Easypanel.
+Confirmado por el usuario: era exactamente la hipótesis nº1 (caché del navegador con la CSP antigua). Con un refresco forzado (Ctrl+Shift+R) el mapa ya funciona correctamente contra `rutasegura.placeat.org`. No hace falta ninguna acción de código adicional por esto — el mapa, el buscador de dirección y el dibujo de la ruta quedan verificados en producción.
 
 ## Cómo continuar en una nueva sesión
 
-1. Preguntar si ya se ha redesplegado el commit `b12bf7b` en Easypanel; si no, recordar al usuario que le dé a "Implementar".
-2. Probar en `rutasegura.placeat.org`: crear una cuenta `USUARIO`, generar su código; crear una cuenta `TUTOR`, canjear el código; dibujar una ruta con al menos un horario (probar también la duración estimada opcional).
-3. Si todo va bien, seguir con M3 (plugin nativo `RouteGuard`).
-4. Recordar las tres decisiones de privacidad ya tomadas (vista bajo demanda, desvío en el dispositivo, sin historial continuo) antes de proponer alternativas — fueron decisiones explícitas del cliente (PLACEAT), no supuestos.
+1. **M1 y M2 ya están verificados en producción real** (`rutasegura.placeat.org`, último commit probado: `8bfe954`): login/registro, emparejamiento tutor↔usuario, mapa con buscador de dirección y dibujo de ruta con horario, todo confirmado funcionando por el usuario. No hace falta repetir estas pruebas al empezar, solo confirmar si hay commits nuevos sin desplegar.
+2. Siguiente paso natural: **M3** (plugin nativo Android `RouteGuard` — geofencing, permisos de ubicación en segundo plano, foreground service).
+3. Recordar las tres decisiones de privacidad ya tomadas (vista bajo demanda, desvío en el dispositivo, sin historial continuo) antes de proponer alternativas — fueron decisiones explícitas del cliente (PLACEAT), no supuestos.
