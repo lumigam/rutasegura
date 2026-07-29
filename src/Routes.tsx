@@ -19,6 +19,22 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
   const layerRef = useRef<L.LayerGroup | null>(null)
   const onAddPointRef = useRef(onAddPoint)
   onAddPointRef.current = onAddPoint
+  const [query, setQuery] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+
+  const search = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!query.trim() || searching) return
+    setSearching(true); setSearchError('')
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`)
+      const results = await response.json() as { lat: string, lon: string }[]
+      if (!results.length) { setSearchError('No se ha encontrado ese lugar'); return }
+      mapRef.current?.setView([Number(results[0].lat), Number(results[0].lon)], 15)
+    } catch { setSearchError('No se pudo buscar el lugar') }
+    finally { setSearching(false) }
+  }
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
@@ -43,7 +59,14 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
     }
   }, [points, corridorWidthMeters])
 
-  return <div ref={containerRef} className="route-map" style={{ cursor: editable ? 'crosshair' : 'grab' }} />
+  return <>
+    <form className="map-search" onSubmit={search}>
+      <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Ej. Calle Mayorga 1, Plasencia" />
+      <button type="submit" disabled={searching}>{searching ? '…' : 'Buscar'}</button>
+    </form>
+    {searchError && <div className="form-error">{searchError}</div>}
+    <div ref={containerRef} className="route-map" style={{ cursor: editable ? 'crosshair' : 'grab' }} />
+  </>
 }
 
 export function PairingCard({ role, onLinked }: { role: UserAccount['role'], onLinked?: () => void }) {
@@ -178,6 +201,7 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
   return <div className="modal-backdrop" role="presentation"><div className="sheet route-sheet" role="dialog" aria-modal="true" aria-labelledby="route-title">
     <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">RUTA</p><h1 id="route-title">{initial ? 'Editar ruta' : 'Nueva ruta'}</h1></div><span /></div>
     <div className="route-editor-body">
+      <p className="lede-note map-hint">Busca el punto de partida y luego toca el mapa para ir marcando el camino, punto a punto.</p>
       <RouteMap points={points} corridorWidthMeters={corridorWidthMeters} editable onAddPoint={addPoint} />
       <div className="route-map-actions">
         <button type="button" className="text-button" onClick={undoPoint} disabled={!points.length}>Deshacer último punto</button>

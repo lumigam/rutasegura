@@ -41,7 +41,7 @@ app.use((req, res, next) => {
 })
 app.use(helmet({ contentSecurityPolicy: { directives: {
   defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"],
-  fontSrc: ["'self'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"],
+  fontSrc: ["'self'"], imgSrc: ["'self'", 'data:', 'https://*.tile.openstreetmap.org'], connectSrc: ["'self'", 'https://nominatim.openstreetmap.org'],
   objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"],
 } } }))
 app.use(express.json({ limit: '100kb' }))
