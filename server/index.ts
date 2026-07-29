@@ -203,6 +203,13 @@ app.get('/api/pairing/links', authenticate, consentRequired, tutorOnly, async (r
   const links = await prisma.link.findMany({ where: { tutorId: req.user!.id }, include: { usuario: { select: { id: true, name: true, email: true } } } })
   res.json(links.map(l => l.usuario))
 })
+app.delete('/api/pairing/links/:usuarioId', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  await prisma.$transaction([
+    prisma.route.deleteMany({ where: { tutorId: req.user!.id, usuarioId: String(req.params.usuarioId) } }),
+    prisma.link.deleteMany({ where: { tutorId: req.user!.id, usuarioId: String(req.params.usuarioId) } }),
+  ])
+  res.json({ ok: true })
+})
 
 app.get('/api/routes', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
   const routes = await prisma.route.findMany({ where: { tutorId: req.user!.id }, include: { schedules: true }, orderBy: { createdAt: 'asc' } })

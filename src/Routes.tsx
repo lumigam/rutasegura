@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css'
 import { Check, ChevronRight, MapPin, Plus, Trash2, X } from './icons'
 import {
   claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
-  generatePairingCode, loadLinkedUsuarios, loadMyRoutes, loadRoutes, updateRoute, updateSchedule,
+  generatePairingCode, loadLinkedUsuarios, loadMyRoutes, loadRoutes, unlinkUsuario, updateRoute, updateSchedule,
   type ScheduleInput,
 } from './storage'
 import type { LatLng, LinkedUsuario, Route, Schedule, UserAccount, Weekday } from './types'
@@ -87,6 +87,27 @@ export function PairingCard({ role, onLinked }: { role: UserAccount['role'], onL
   </section>
 }
 
+function LinkedUsuariosList({ usuarios, onChange }: { usuarios: LinkedUsuario[], onChange: () => void }) {
+  const [error, setError] = useState('')
+  const remove = async (usuario: LinkedUsuario) => {
+    if (!window.confirm(`¿Quitar el vínculo con ${usuario.name}? También se eliminarán sus rutas y horarios. Podréis volver a vincularos más tarde con un código nuevo.`)) return
+    try { await unlinkUsuario(usuario.id); onChange() }
+    catch { setError('No se pudo quitar el vínculo') }
+  }
+  return <section className="profile-card">
+    <h2>Personas vinculadas</h2>
+    <p>Puedes quitar el vínculo cuando quieras; se puede rehacer con un código nuevo.</p>
+    {error && <div className="form-error">{error}</div>}
+    <div className="route-list">
+      {usuarios.map(usuario => <div className="route-row" key={usuario.id}>
+        <span className="route-row-icon"><MapPin /></span>
+        <span className="route-row-text"><strong>{usuario.name}</strong><small>{usuario.email}</small></span>
+        <div className="schedule-actions"><button type="button" onClick={() => remove(usuario)} aria-label={`Quitar vínculo con ${usuario.name}`}><Trash2 /></button></div>
+      </div>)}
+    </div>
+  </section>
+}
+
 export function RoutesView() {
   const [usuarios, setUsuarios] = useState<LinkedUsuario[]>([])
   const [routes, setRoutes] = useState<Route[]>([])
@@ -105,6 +126,7 @@ export function RoutesView() {
     {error && <div className="form-error">{error}</div>}
     <PairingCard role="TUTOR" onLinked={refresh} />
     {loaded && usuarios.length === 0 && <p className="lede-note">Vincula primero a una persona usuaria para poder crear una ruta.</p>}
+    {usuarios.length > 0 && <LinkedUsuariosList usuarios={usuarios} onChange={refresh} />}
     {routes.length > 0 && <div className="route-list">
       {routes.map(route => <button className="route-row" key={route.id} onClick={() => setEditing(route)}>
         <span className="route-row-icon"><MapPin /></span>

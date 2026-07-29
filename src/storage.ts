@@ -71,6 +71,7 @@ export const deleteOwnAccount = (password: string) => request<{ ok: boolean }>('
 export const generatePairingCode = () => request<{ code: string, expiresAt: string }>('/api/pairing/code', { method: 'POST' })
 export const claimPairingCode = (code: string) => request<{ ok: boolean, usuario: LinkedUsuario }>('/api/pairing/claim', { method: 'POST', body: JSON.stringify({ code }) })
 export const loadLinkedUsuarios = () => request<LinkedUsuario[]>('/api/pairing/links')
+export const unlinkUsuario = (usuarioId: string) => request<{ ok: boolean }>(`/api/pairing/links/${usuarioId}`, { method: 'DELETE' }).then(() => undefined)
 
 export const loadRoutes = () => request<Route[]>('/api/routes')
 export const loadMyRoutes = () => request<Route[]>('/api/routes/mine')
