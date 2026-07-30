@@ -4,12 +4,13 @@
 
 App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuidadora programa una ruta y un horario habituales para una persona acompañada (persona con discapacidad intelectual, o hijo/a de 9-16 años), y recibe avisos de salida, llegada y desvío del camino. Novedad añadida durante el diseño: también avisará si la persona no ha llegado a la hora prevista aunque no se haya desviado (se ha quedado parada).
 
-## Situación actual — 30 de julio de 2026
+## Situación actual — 30 de julio de 2026 (final del día)
 
 - Repositorio: [github.com/lumigam/rutasegura](https://github.com/lumigam/rutasegura), rama `main`, último commit `8ce28d1`.
 - Desplegado en Easypanel (VPS Contabo), dominio `rutasegura.placeat.org` (DNS y SSL ya configurados), servicio `rutasegura` + base de datos `rutasegura-postgres`, puerto interno `3000`.
 - **M1 y M2 desplegados y verificados en real** por el usuario (login, emparejamiento, dibujo de rutas con el mapa, todo probado en `rutasegura.placeat.org`).
-- **M3 (plugin nativo de geolocalización) y M4 (motor de avisos) recién subidos (commit `8ce28d1`), compilan correctamente en la CI de GitHub Actions, pero todavía NO se han probado en un dispositivo real ni redesplegado en Easypanel.** Ver la sección "M3/M4" más abajo para el detalle.
+- **M3 (plugin nativo `RouteGuard`) y M4 (motor de avisos)**: código completo, subido (commit `8ce28d1`), compila limpio tanto en la CI de GitHub Actions como en local (ver sección de compilación local más abajo). **El APK de depuración ya se ha instalado correctamente en el teléfono del usuario** — pendiente solo la prueba funcional real (permisos, geovallas al caminar, servicio en primer plano, avisos).
+- **IMPORTANTE — el backend de `rutasegura.placeat.org` TODAVÍA NO se ha redesplegado con el commit `8ce28d1`.** El usuario no pudo darle a "Implementar" en Easypanel hoy por un imprevisto suyo, y yo (el asistente) **no tengo ningún acceso a Easypanel ni al VPS** (ni token de API ni SSH) para hacerlo en su lugar — si se necesita en el futuro, hay que darme credenciales explícitas y decirme exactamente qué ejecutar. **Mientras no se redespliegue, cualquier evento que el plugin nativo intente enviar a `/api/trips/events` fallará (esa ruta no existe todavía en el servidor en producción)** — se puede probar la parte de permisos/UI del móvil, pero no el ciclo completo hasta que el servidor esté al día.
 - Historial de commits relevantes: `dcc6b0e` (M1), `b12bf7b` (identidad PLACEAT + M2), `8ce28d1` (M3+M4). El historial completo está en GitHub.
 
 ## Decisiones de arquitectura ya tomadas (no las repitas sin motivo)
@@ -114,8 +115,31 @@ Construidos y subidos (`8ce28d1`). Sin Firebase — "ver ahora" queda deliberada
   - `compileDebugJavaWithJavac` → **BUILD SUCCESSFUL**, confirmando en local (no solo en la CI) que el plugin `RouteGuard` compila.
 - Pendiente explícitamente para cuando exista un proyecto Firebase de PLACEAT: **"ver ahora"** (despertar bajo demanda el móvil de la persona usuaria para una localización puntual).
 
+## El APK "no se podía analizar" al instalarlo — causa real y cómo evitarlo
+
+El usuario bajó el APK de depuración a su Drive para instalarlo (igual que hacía con Pastillero) y Android daba **"No se ha podido analizar el paquete"**. Diagnóstico paso a paso (útil si vuelve a pasar):
+
+1. `unzip -t` sobre el APK decía que no había errores, pero `apksigner verify` (la herramienta oficial de Android, mucho más estricta) daba **`ZIP End of Central Directory record not found`** — el archivo estaba realmente corrupto, no era cosa del teléfono ni de Drive.
+2. Se descartó `gh run download` y Google Drive como causa: se bajó el `.zip` del artefacto **directo de la API de GitHub** (`gh api repos/.../actions/artifacts/<id>/zip`) y `unzip -t` sobre ESE zip confirmó que el `app-debug.apk` que contiene está perfectamente íntegro.
+3. La corrupción aparecía **al extraerlo a disco en la carpeta de trabajo del proyecto** y comprobarlo en un segundo paso/comando separado: el fichero extraído terminaba con un fragmento de texto identificable como una línea del propio transcript JSONL de esta sesión de Claude Code (se veía literalmente el nombre de esta sesión y el `sessionId`). Es decir: **algo del entorno local (no el proyecto, no GitHub, no el teléfono) añadía datos de la sesión al final de un fichero recién escrito en el directorio de trabajo**, entre una llamada a herramienta y la siguiente.
+4. **Solución fiable**: extraer el `.apk` y verificarlo con `apksigner` **en el mismo comando/paso**, sin dejar que pase otra llamada de herramienta por medio:
+   ```powershell
+   $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+   $apksigner = "$env:LOCALAPPDATA\Android\Sdk\build-tools\36.0.0\apksigner.bat"
+   Expand-Archive -Path "ruta\al\artifact.zip" -DestinationPath "$env:TEMP\apk-check" -Force
+   & $apksigner verify --verbose "$env:TEMP\apk-check\app-debug.apk"
+   ```
+   Si dice `Verifies`, el APK es válido y se puede copiar/subir a Drive con confianza.
+- **APK bueno y verificado de este commit**: `P:\PR\PRUEBAS\Ruta Segura\releases\android-test\ruta-segura-verificado.apk` (firma Android Debug estándar, verificado con `apksigner`). **El usuario ya lo instaló correctamente en su teléfono.**
+
 ## Cómo continuar en una nueva sesión
 
-1. **M1 y M2 ya están verificados en producción real** (`rutasegura.placeat.org`, último commit probado: `8bfe954`): login/registro, emparejamiento tutor↔usuario, mapa con buscador de dirección y dibujo de ruta con horario, todo confirmado funcionando por el usuario. No hace falta repetir estas pruebas al empezar, solo confirmar si hay commits nuevos sin desplegar.
-2. Siguiente paso natural: **M3** (plugin nativo Android `RouteGuard` — geofencing, permisos de ubicación en segundo plano, foreground service).
-3. Recordar las tres decisiones de privacidad ya tomadas (vista bajo demanda, desvío en el dispositivo, sin historial continuo) antes de proponer alternativas — fueron decisiones explícitas del cliente (PLACEAT), no supuestos.
+1. **M1 y M2 verificados en producción real** (`rutasegura.placeat.org`): login/registro, emparejamiento, mapa con buscador de dirección, dibujo de ruta con horario — todo confirmado por el usuario.
+2. **M3+M4 (commit `8ce28d1`) compilan limpio (CI + local) y el APK ya se instala en el teléfono del usuario.** Falta:
+   - **Redesplegar el backend en Easypanel con el commit `8ce28d1`** (pendiente por un imprevisto del usuario, no técnico) — sin esto, el móvil no podrá reportar eventos reales a `/api/trips/events`.
+   - Probar de verdad en el teléfono, en este orden: permiso de ubicación en primer plano → permiso "todo el tiempo" en segundo plano → que aparezca la notificación del servicio cuando toque la hora programada de una ruta real → salir de la geovalla de origen y comprobar que llega el aviso `DEPARTED` al tutor (necesita el backend redesplegado) → llegar a destino → forzar un desvío del camino → probar "no ha salido"/"retraso en la llegada" dejando pasar la ventana horaria.
+   - Reiniciar el teléfono con una ruta activa y comprobar que las geovallas se restauran (`BootReceiver`).
+3. Si hace falta compilar/verificar el APK localmente, usar la receta de PowerShell de la sección de compilación local (más arriba) y SIEMPRE verificar con `apksigner` en el mismo paso en que se extraiga, por el problema de corrupción documentado arriba.
+4. Si el usuario pide desplegar en Easypanel: no tengo acceso propio, hay que darme credenciales explícitas (token de API o SSH) y la instrucción exacta.
+5. Recordar las decisiones de privacidad ya tomadas (vista bajo demanda, desvío en el dispositivo, sin historial continuo, sin Firebase todavía) antes de proponer alternativas — fueron decisiones explícitas del cliente o del usuario, no supuestos.
+6. Después de verificar M3/M4 en el dispositivo: seguir con M5 (documentos legales/RGPD y ficha de Play Console para datos de ubicación).
