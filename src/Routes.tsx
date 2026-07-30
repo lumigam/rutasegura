@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { Check, ChevronRight, MapPin, Plus, Trash2, X } from './icons'
+import { Check, ChevronRight, Locate, MapPin, Plus, Trash2, X } from './icons'
 import {
   claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
-  generatePairingCode, getApiOrigin, getSessionToken, loadLinkedUsuarios, loadMyRoutes, loadRoutes, unlinkUsuario, updateRoute, updateSchedule,
+  generatePairingCode, getApiOrigin, getLiveConfig, getSessionToken, loadLinkedUsuarios, loadMyRoutes, loadRoutes,
+  pollLiveLocation, requestLiveLocation, unlinkUsuario, updateRoute, updateSchedule,
   type ScheduleInput,
 } from './storage'
 import {
-  getRouteGuardStatus, isNativeAndroid, openLocationSettings, requestBackgroundLocation, requestForegroundLocation,
+  getRouteGuardStatus, isNativeAndroid, openLocationSettings, registerLiveLocationToken, requestBackgroundLocation, requestForegroundLocation,
   syncRouteGuardRoutes, updateRouteGuardSession, type RouteGuardStatus,
 } from './routeGuard'
 import type { LatLng, LinkedUsuario, Route, Schedule, UserAccount, Weekday } from './types'
@@ -116,6 +117,9 @@ export function PairingCard({ role, onLinked }: { role: UserAccount['role'], onL
 
 function LinkedUsuariosList({ usuarios, onChange }: { usuarios: LinkedUsuario[], onChange: () => void }) {
   const [error, setError] = useState('')
+  const [liveEnabled, setLiveEnabled] = useState(false)
+  const [viewing, setViewing] = useState<LinkedUsuario | null>(null)
+  useEffect(() => { getLiveConfig().then(c => setLiveEnabled(c.enabled)).catch(() => undefined) }, [])
   const remove = async (usuario: LinkedUsuario) => {
     if (!window.confirm(`¿Quitar el vínculo con ${usuario.name}? También se eliminarán sus rutas y horarios. Podréis volver a vincularos más tarde con un código nuevo.`)) return
     try { await unlinkUsuario(usuario.id); onChange() }
@@ -129,10 +133,55 @@ function LinkedUsuariosList({ usuarios, onChange }: { usuarios: LinkedUsuario[],
       {usuarios.map(usuario => <div className="route-row" key={usuario.id}>
         <span className="route-row-icon"><MapPin /></span>
         <span className="route-row-text"><strong>{usuario.name}</strong><small>{usuario.email}</small></span>
-        <div className="schedule-actions"><button type="button" onClick={() => remove(usuario)} aria-label={`Quitar vínculo con ${usuario.name}`}><Trash2 /></button></div>
+        <div className="schedule-actions">
+          {liveEnabled && <button type="button" onClick={() => setViewing(usuario)} aria-label={`Ver ubicación de ${usuario.name} ahora`}><Locate /></button>}
+          <button type="button" onClick={() => remove(usuario)} aria-label={`Quitar vínculo con ${usuario.name}`}><Trash2 /></button>
+        </div>
       </div>)}
     </div>
+    {viewing && <LiveLocationModal usuario={viewing} onClose={() => setViewing(null)} />}
   </section>
+}
+
+function LiveLocationModal({ usuario, onClose }: { usuario: LinkedUsuario, onClose: () => void }) {
+  const [state, setState] = useState<'requesting' | 'pending' | 'done' | 'expired' | 'error'>('requesting')
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<L.Map | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async (requestId: string) => {
+      if (cancelled) return
+      try {
+        const result = await pollLiveLocation(requestId)
+        if (cancelled) return
+        if (result.status === 'done' && result.lat != null && result.lng != null) {
+          setState('done')
+          if (containerRef.current && !mapRef.current) {
+            const map = L.map(containerRef.current, { center: [result.lat, result.lng], zoom: 16 })
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map)
+            L.marker([result.lat, result.lng]).addTo(map)
+            mapRef.current = map
+          }
+          return
+        }
+        if (result.status === 'expired') { setState('expired'); return }
+        timer = setTimeout(() => poll(requestId), 2000)
+      } catch { if (!cancelled) setState('error') }
+    }
+    requestLiveLocation(usuario.id).then(({ requestId }) => { if (!cancelled) { setState('pending'); timer = setTimeout(() => poll(requestId), 1500) } })
+      .catch(() => { if (!cancelled) setState('error') })
+    return () => { cancelled = true; clearTimeout(timer); mapRef.current?.remove(); mapRef.current = null }
+  }, [usuario.id])
+
+  return <div className="modal-backdrop" role="presentation"><div className="sheet" role="dialog" aria-modal="true" aria-labelledby="live-title">
+    <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">VER AHORA</p><h1 id="live-title">{usuario.name}</h1></div><span /></div>
+    {(state === 'requesting' || state === 'pending') && <p className="lede-note">Pidiendo su ubicación… puede tardar unos segundos.</p>}
+    {state === 'done' && <div ref={containerRef} className="route-map" />}
+    {state === 'expired' && <div className="form-error">No ha respondido a tiempo. Puede que tenga la aplicación cerrada o sin conexión.</div>}
+    {state === 'error' && <div className="form-error">No se ha podido pedir la ubicación.</div>}
+  </div></div>
 }
 
 export function RoutesView() {
@@ -340,6 +389,7 @@ export function UsuarioRoutes() {
     const token = getSessionToken()
     if (token) void updateRouteGuardSession(token, getApiOrigin())
     void syncRouteGuardRoutes(routes)
+    void registerLiveLocationToken()
   }, [loaded, routes])
 
   return <div className="usuario-routes">

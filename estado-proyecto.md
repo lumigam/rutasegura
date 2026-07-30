@@ -12,6 +12,8 @@ App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuida
 - **M3 (plugin nativo `RouteGuard`) y M4 (motor de avisos)**: código completo, subido (commit `8ce28d1`), compila limpio tanto en la CI de GitHub Actions como en local (ver sección de compilación local más abajo). **El APK de depuración ya se ha instalado correctamente en el teléfono del usuario** — pendiente solo la prueba funcional real (permisos, geovallas al caminar, servicio en primer plano, avisos).
 - **IMPORTANTE — el backend de `rutasegura.placeat.org` TODAVÍA NO se ha redesplegado con el commit `8ce28d1`.** El usuario no pudo darle a "Implementar" en Easypanel hoy por un imprevisto suyo, y yo (el asistente) **no tengo ningún acceso a Easypanel ni al VPS** (ni token de API ni SSH) para hacerlo en su lugar — si se necesita en el futuro, hay que darme credenciales explícitas y decirme exactamente qué ejecutar. **Mientras no se redespliegue, cualquier evento que el plugin nativo intente enviar a `/api/trips/events` fallará (esa ruta no existe todavía en el servidor en producción)** — se puede probar la parte de permisos/UI del móvil, pero no el ciclo completo hasta que el servidor esté al día.
 - Historial de commits relevantes: `dcc6b0e` (M1), `b12bf7b` (identidad PLACEAT + M2), `8ce28d1` (M3+M4). El historial completo está en GitHub.
+- **Icono real de la app generado y verificado** (ver sección dedicada más abajo) — el APK ya no lleva el icono genérico de plantilla de Android Studio, lleva el `BrandMark` real de la marca. Pendiente de commitear (los ficheros están generados en el árbol de trabajo pero no subidos todavía).
+- **"Ver ahora" (ubicación bajo demanda vía Firebase/FCM) implementado de punta a punta** (backend, plugin nativo, UI del tutor) — ver sección dedicada más abajo. Compila limpio en local pero **no se ha podido probar en un dispositivo real todavía**: falta que el usuario genere la clave de cuenta de servicio de Firebase y que se redespliegue el backend. Tampoco comiteado todavía.
 
 ## Decisiones de arquitectura ya tomadas (no las repitas sin motivo)
 
@@ -79,8 +81,8 @@ App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuida
 - **M3 (siguiente paso natural)**: plugin nativo Android `RouteGuard` — geofencing con `GeofencingClient`/`FusedLocationProviderClient`, permisos `ACCESS_FINE_LOCATION`/`ACCESS_BACKGROUND_LOCATION`/`FOREGROUND_SERVICE_LOCATION`, foreground service, restauración tras reinicio. Plantilla a seguir: `P:\PR\Pruebas\Pastillero Virtual\android\app\src\main\java\org\placeat\pastillero\` (`NativeAlarmPlugin.java`, `AlarmScheduler.java`, `AlarmStore.java`, `AlarmReceiver.java`, `BootReceiver.java`, `AlarmService.java`). Añadir `com.google.android.gms:play-services-location` a `android/app/build.gradle`.
 - **M4**: detección de desvío en el dispositivo (punto-a-polilínea contra el corredor), flujo "ver ahora" bajo demanda vía FCM, motor de creación de `Trip` por cada ocurrencia programada (mismo patrón que `sendScheduledNotifications` de Pastillero pero sin implementar todavía), y el envío real de los 4 avisos (salida/llegada/desvío/**retraso**) por push al tutor.
 - **M5**: adaptar `docs/google-play/` y `docs/rgpd/` (aún no creados en este proyecto) siguiendo la estructura de Pastillero pero para datos de ubicación en vez de salud. Pendiente de decidir con el DPO de PLACEAT: de quién es el consentimiento cuando la persona usuaria es menor o tiene una medida de apoyo conforme a la Ley 8/2021.
-- No hay iconos PNG reales (`manifest.webmanifest` referencia `/icons/icon-192.png` etc. que no existen todavía) — pendiente de recursos gráficos reales basados en `BrandMark`.
-- FCM (necesario para "ver ahora" y los avisos push de M4) no está configurado todavía.
+- ~~No hay iconos PNG reales...~~ **Resuelto el 30 de julio** — ver sección dedicada más abajo.
+- ~~FCM (necesario para "ver ahora"...) no está configurado todavía.~~ **Implementado el 30 de julio** — ver sección dedicada. Falta la clave de cuenta de servicio + redespliegue para que funcione en producción.
 - El plan de arquitectura completo (M1 a M5, con las razones de cada decisión) sigue disponible en `C:\Users\lumig\.claude\plans\crystalline-floating-aho.md` si hace falta repasarlo.
 
 ## Fallos reales encontrados tras el primer despliegue de M2
@@ -113,7 +115,50 @@ Construidos y subidos (`8ce28d1`). Sin Firebase — "ver ahora" queda deliberada
     cd "P:\PR\PRUEBAS\Ruta Segura\android"; .\gradlew.bat compileDebugJavaWithJavac
     ```
   - `compileDebugJavaWithJavac` → **BUILD SUCCESSFUL**, confirmando en local (no solo en la CI) que el plugin `RouteGuard` compila.
-- Pendiente explícitamente para cuando exista un proyecto Firebase de PLACEAT: **"ver ahora"** (despertar bajo demanda el móvil de la persona usuaria para una localización puntual).
+- ~~Pendiente explícitamente para cuando exista un proyecto Firebase de PLACEAT: "ver ahora"~~ **Implementado el 30 de julio, una vez el usuario tuvo el proyecto Firebase** — ver la sección dedicada "Ver ahora — ubicación bajo demanda vía Firebase/FCM" más abajo.
+
+## "Ver ahora" — ubicación bajo demanda vía Firebase/FCM — 30 de julio de 2026
+
+Implementada la función que quedaba explícitamente pendiente desde el diseño original (M4): que el tutor pueda pedir, bajo demanda, la ubicación puntual de la persona usuaria en cualquier momento (no solo durante un trayecto programado), sin mantener ningún seguimiento continuo. El usuario ya tenía cuenta de Firebase con dos proyectos existentes y reutilizó uno (`push-app-placeat`), añadiendo Ruta Segura como app Android nueva dentro de él (package `org.placeat.rutasegura`).
+
+**Cómo funciona el flujo:**
+1. El tutor pulsa el botón nuevo (icono de diana) junto al nombre de una persona vinculada, en "Personas vinculadas".
+2. El backend (`POST /api/live/request`) comprueba el vínculo, busca los tokens FCM registrados de esa persona usuaria y le manda un mensaje **de datos silencioso** (sin notificación visible) vía Firebase Cloud Messaging con un `requestId`.
+3. El dispositivo de la persona usuaria (si tiene la app instalada y el permiso de ubicación concedido) recibe el mensaje aunque la app esté cerrada, pide una localización puntual fresca (con `getCurrentLocation`, y si no responde a tiempo cae a la última posición conocida) y se la manda de vuelta al backend (`POST /api/live/location`).
+4. Mientras tanto, la pantalla del tutor va preguntando cada 2 segundos (`GET /api/live/:requestId`) hasta que llega la respuesta o caduca a los 60 segundos, y entonces pinta un mapa Leaflet con la posición.
+- **No se guarda ningún historial**: las solicitudes viven en memoria del proceso Node (`Map`, no en la base de datos) con caducidad de 60 segundos y limpieza perezosa a los 5 minutos — coherente con la decisión de privacidad de no mantener seguimiento continuo.
+
+**Piezas construidas:**
+- **Backend** (`server/index.ts`): `firebase-admin` (API modular v14: `firebase-admin/app` + `firebase-admin/messaging`, no el namespace `admin` antiguo). Se inicializa solo si existe `FIREBASE_SERVICE_ACCOUNT_BASE64` (bandera `liveEnabled`, mismo patrón que `pushEnabled` con VAPID). Endpoints nuevos: `GET /api/live/config` (para que el frontend oculte el botón si no está configurado), `POST /api/live/token` (la persona usuaria registra su token FCM), `POST /api/live/request` (el tutor pide ubicación), `POST /api/live/location` (la persona usuaria responde), `GET /api/live/:requestId` (el tutor consulta el estado).
+- **Esquema** (`prisma/schema.prisma`): modelo nuevo `FcmToken` (token único + `userId`). El enum `EventType.LOCATE_RESPONSE` que ya existía en el esquema desde M2 **no se ha usado en esta pasada** — se decidió no complicar el flujo intentando engancharlo a un `Trip`/`TripEvent` (el "ver ahora" puede pedirse fuera de cualquier ventana de horario programada); queda como posible mejora futura si se quiere dejar constancia en el historial de un trayecto en curso.
+- **Plugin nativo** (`android/app/src/main/java/org/placeat/rutasegura/`): `LocateMessagingService.java` (extiende `FirebaseMessagingService`; `onMessageReceived` pide la ubicación puntual y la reporta, `onNewToken` reregistra el token si cambia), `LiveLocationApi.java` (cliente HTTP mínimo hacia `/api/live/token` y `/api/live/location`, calcado del patrón de `RouteGuardApi`), y un método nuevo `registerLiveToken()` en `RouteGuardPlugin.java` que pide el token FCM activo y lo manda al backend. Registrado en `AndroidManifest.xml` con el intent-filter `com.google.firebase.MESSAGING_EVENT`. Gradle: añadido `firebase-bom:33.7.0` + `firebase-messaging` en `android/app/build.gradle` (el plugin `com.google.gms.google-services` ya venía preparado de fábrica por Capacitor, solo esperaba a que existiera `google-services.json`).
+- **`google-services.json`**: descargado por el usuario y colocado en `android/app/google-services.json`. Contiene solo un API key restringido por nombre de paquete (no es un secreto sensible al estilo `JWT_SECRET`), así que se deja comiteado como es práctica habitual en apps Android.
+- **Frontend**: `src/routeGuard.ts` expone `registerLiveLocationToken()`; se llama desde `UsuarioRoutes` justo después de `updateRouteGuardSession()`, para que cualquier persona usuaria que abra la app en un móvil quede registrada para recibir el ping. `src/storage.ts` añade `getLiveConfig`/`requestLiveLocation`/`pollLiveLocation`. `src/Routes.tsx` añade el botón "Ver ahora" (icono `Locate` nuevo en `src/icons.tsx`) dentro de `LinkedUsuariosList` y el componente `LiveLocationModal` que hace el sondeo y pinta el mapa.
+
+**Verificado en local**: `prisma validate`/`generate`, `tsc -b` (frontend), `tsc -p server/tsconfig.json`, `vite build`, `npx cap sync android` y `gradlew assembleDebug` — todo compila limpio. **No probado en un dispositivo real todavía** — para eso hace falta lo de la siguiente sección.
+
+**Pendiente, en este orden:**
+1. **Generar la clave de cuenta de servicio de Firebase**: en la consola de Firebase → Configuración del proyecto → Cuentas de servicio → "Generar nueva clave privada" (descarga un JSON). Ese JSON hay que codificarlo en base64 (`node -e "console.log(Buffer.from(require('fs').readFileSync('ruta/al/fichero.json')).toString('base64'))"`) y ponerlo como variable de entorno `FIREBASE_SERVICE_ACCOUNT_BASE64` en Easypanel — documentado ya en `.env.example`. Sin esto, `liveEnabled` queda en `false` y el botón "Ver ahora" ni siquiera aparece en la app del tutor.
+2. **Redesplegar el backend en Easypanel** con este commit (se junta con el redespliegue de M3+M4 que ya estaba pendiente por el imprevisto del usuario) — el contenedor ejecuta `npx prisma db push` automáticamente al arrancar (ver `Dockerfile`), así que la tabla `fcm_tokens` se crea sola, no hace falta ninguna migración manual.
+3. Instalar el último APK en el móvil de la persona usuaria, iniciar sesión como `USUARIO` (eso dispara `registerLiveLocationToken()` y registra el token FCM en el backend).
+4. Desde una cuenta `TUTOR` (web o app), ir a "Personas vinculadas" y pulsar el icono de diana junto al nombre.
+5. Cosa a vigilar en la prueba real: la recepción de "ver ahora" en segundo plano puede depender de que la persona usuaria tenga concedido el permiso de ubicación en segundo plano ("todo el tiempo"), no solo en primer plano — si con solo el permiso de primer plano falla, habrá que documentarlo como limitación real de Android, no como bug.
+
+## Icono real de la app generado — 30 de julio de 2026
+
+El usuario instaló el APK, vio que ya funcionaba el mapa, pero notó que el icono de la app en el móvil no era el de la app (salía el icono genérico de plantilla de Android Studio/Capacitor: un escudo con degradado en teal sobre fondo verde azulado). Diagnóstico: **nunca se había generado un icono real**. `public/icons/` estaba vacío pese a que `manifest.webmanifest` y `index.html` ya referenciaban ficheros ahí (`icon-192.png`, `favicon-32.png`, `apple-touch-icon.png`), y los `mipmap-*/ic_launcher*.png` de Android seguían siendo los de plantilla que genera Capacitor al crear el proyecto.
+
+**Solución aplicada:**
+- Instalado `@capacitor/assets` como devDependency (requiere `npm approve-scripts sharp` porque el build nativo de `sharp` viene bloqueado por defecto).
+- Generadas 3 imágenes fuente en `assets/` (`icon-only.png`, `icon-foreground.png`, `icon-background.png`, 1024×1024) a partir del `BrandMark` que ya existía en `src/icons.tsx` (el rombo/cubo de tres caras en los azules de marca `--brand-deep`/`--brand-mid`/`--brand`), sobre fondo `#eef3fb` (el mismo `background_color` del manifest).
+- `npx capacitor-assets generate --android --pwa` generó todos los tamaños de Android (`mipmap-ldpi` a `mipmap-xxxhdpi`, adaptive icon foreground/background para Android 8+) y los iconos PWA (`icon-48.webp` a `icon-512.webp`).
+- **Gotcha de la herramienta**: escribió los iconos PWA en una carpeta `icons/` en la raíz del proyecto (no en `public/icons/`) con rutas `../icons/...` y `type: image/png` sobre ficheros `.webp` — hubo que mover la carpeta a `public/icons/` a mano y corregir `src`/`type` en `manifest.webmanifest`. También reformateó (solo espacios en blanco, sin cambio funcional) `AndroidManifest.xml`; se revirtió ese fichero para no ensuciar el diff.
+- Recompilado el APK de depuración en local (mismo toolchain JBR/trust-store de la sección de compilación) — `BUILD SUCCESSFUL` — y entregado al usuario para instalar y confirmar visualmente que ya sale el cubo azul en vez del icono genérico.
+
+**Pendiente:**
+- El usuario tiene que instalar este último APK y confirmar que el icono ya es el correcto en el launcher del teléfono (visualmente parece correcto en los PNG generados, pero falta la confirmación real en el dispositivo).
+- **Los cambios no están comiteados todavía** — quedan en el árbol de trabajo: `assets/` (fuente reutilizable para regenerar en el futuro), `public/icons/*`, todos los `android/app/src/main/res/mipmap-*/ic_launcher*.png`, `public/manifest.webmanifest`, y `package.json`/`package-lock.json` (nueva devDependency `@capacitor/assets`). Falta decidir cuándo comitear y subir.
+- Si en el futuro cambia el logo/colores de marca: editar las 3 imágenes fuente en `assets/` (o regenerarlas desde el SVG de `BrandMark`) y repetir `npx capacitor-assets generate --android --pwa` + el arreglo manual de rutas en `manifest.webmanifest` + mover `icons/` a `public/icons/`.
 
 ## El APK "no se podía analizar" al instalarlo — causa real y cómo evitarlo
 
@@ -134,6 +179,8 @@ El usuario bajó el APK de depuración a su Drive para instalarlo (igual que hac
 
 ## Cómo continuar en una nueva sesión
 
+0. **Icono de la app**: confirmar con el usuario que el último APK instalado ya muestra el cubo azul de marca en vez del icono genérico, y **comitear los cambios pendientes** (`assets/`, `public/icons/`, `mipmap-*/ic_launcher*.png`, `manifest.webmanifest`, `package.json`/`package-lock.json`) — ver sección dedicada más arriba.
+0.5. **"Ver ahora" (Firebase/FCM)**: pedir al usuario la clave de cuenta de servicio de Firebase (o confirmar que ya la ha puesto en Easypanel como `FIREBASE_SERVICE_ACCOUNT_BASE64`), redesplegar el backend, y probar el botón "Ver ahora" en un dispositivo real — ver sección dedicada más arriba. También pendiente de comitear.
 1. **M1 y M2 verificados en producción real** (`rutasegura.placeat.org`): login/registro, emparejamiento, mapa con buscador de dirección, dibujo de ruta con horario — todo confirmado por el usuario.
 2. **M3+M4 (commit `8ce28d1`) compilan limpio (CI + local) y el APK ya se instala en el teléfono del usuario.** Falta:
    - **Redesplegar el backend en Easypanel con el commit `8ce28d1`** (pendiente por un imprevisto del usuario, no técnico) — sin esto, el móvil no podrá reportar eventos reales a `/api/trips/events`.

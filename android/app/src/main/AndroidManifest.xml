@@ -35,6 +35,11 @@
         </provider>
 
         <service android:name=".RouteGuardService" android:exported="false" android:foregroundServiceType="location" />
+        <service android:name=".LocateMessagingService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
         <receiver android:name=".GeofenceBroadcastReceiver" android:exported="false" />
         <receiver android:name=".BootReceiver" android:enabled="true" android:exported="true">

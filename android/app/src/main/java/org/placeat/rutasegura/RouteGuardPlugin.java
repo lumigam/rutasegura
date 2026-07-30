@@ -1,6 +1,7 @@
 package org.placeat.rutasegura;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -17,6 +18,7 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
+import com.google.firebase.messaging.FirebaseMessaging;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -85,6 +87,17 @@ public class RouteGuardPlugin extends Plugin {
     public void stopAll(PluginCall call) {
         RouteGuardScheduler.stopAll(getContext());
         call.resolve();
+    }
+
+    @PluginMethod
+    public void registerLiveToken(PluginCall call) {
+        FirebaseMessaging.getInstance().getToken()
+            .addOnSuccessListener(token -> {
+                Context context = getContext();
+                new Thread(() -> LiveLocationApi.registerToken(context, token)).start();
+                call.resolve();
+            })
+            .addOnFailureListener(exception -> call.reject("No se pudo obtener el token de notificaciones", exception));
     }
 
     private boolean hasForegroundLocation() {

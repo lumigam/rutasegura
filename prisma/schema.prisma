@@ -28,6 +28,7 @@ model User {
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
   pushSubscriptions    PushSubscription[]
+  fcmTokens            FcmToken[]
   tutorLinks           Link[]    @relation("TutorLinks")
   usuarioLinks         Link[]    @relation("UsuarioLinks")
   tutorRoutes          Route[]   @relation("TutorRoutes")
@@ -145,4 +146,16 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+model FcmToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("fcm_tokens")
 }

@@ -71,6 +71,12 @@ export async function exportAccountData() {
 }
 export const deleteOwnAccount = (password: string) => request<{ ok: boolean }>('/api/account', { method: 'DELETE', body: JSON.stringify({ password }) }).then(() => undefined)
 
+export type LiveConfig = { enabled: boolean }
+export const getLiveConfig = () => request<LiveConfig>('/api/live/config')
+export const requestLiveLocation = (usuarioId: string) => request<{ requestId: string, expiresAt: string }>('/api/live/request', { method: 'POST', body: JSON.stringify({ usuarioId }) })
+export type LiveStatus = { status: 'pending' | 'done' | 'expired', lat?: number, lng?: number }
+export const pollLiveLocation = (requestId: string) => request<LiveStatus>(`/api/live/${requestId}`)
+
 export const generatePairingCode = () => request<{ code: string, expiresAt: string }>('/api/pairing/code', { method: 'POST' })
 export const claimPairingCode = (code: string) => request<{ ok: boolean, usuario: LinkedUsuario }>('/api/pairing/claim', { method: 'POST', body: JSON.stringify({ code }) })
 export const loadLinkedUsuarios = () => request<LinkedUsuario[]>('/api/pairing/links')

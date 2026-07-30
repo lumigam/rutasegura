@@ -30,6 +30,7 @@ interface RouteGuardNativePlugin {
   updateSession(options: { token: string, apiBaseUrl: string }): Promise<void>
   syncRoutes(options: { routes: RouteGuardRouteInput[] }): Promise<RouteGuardStatus>
   stopAll(): Promise<void>
+  registerLiveToken(): Promise<void>
 }
 
 const RouteGuard = registerPlugin<RouteGuardNativePlugin>('RouteGuard')
@@ -41,6 +42,7 @@ export const requestBackgroundLocation = () => RouteGuard.requestBackgroundLocat
 export const openLocationSettings = () => RouteGuard.openLocationSettings()
 export const updateRouteGuardSession = (token: string, apiBaseUrl: string) => RouteGuard.updateSession({ token, apiBaseUrl })
 export const stopRouteGuard = () => RouteGuard.stopAll()
+export const registerLiveLocationToken = () => RouteGuard.registerLiveToken().catch(() => undefined)
 
 export function syncRouteGuardRoutes(routes: Route[]) {
   if (!isNativeAndroid()) return Promise.resolve(null)

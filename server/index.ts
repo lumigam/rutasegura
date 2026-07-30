@@ -8,7 +8,10 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import webpush from 'web-push'
+import { cert, initializeApp } from 'firebase-admin/app'
+import { getMessaging } from 'firebase-admin/messaging'
 import { decryptValue, encryptValue } from './crypto.js'
 import { localScheduleParts, scheduledInstant } from './schedule.js'
 
@@ -24,6 +27,21 @@ const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY?.trim() || ''
 const pushEnabled = Boolean(vapidPublicKey && vapidPrivateKey)
 if (pushEnabled) webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'https://rutasegura.placeat.org', vapidPublicKey, vapidPrivateKey)
 else if (vapidPublicKey || vapidPrivateKey) console.warn('Web Push desactivado: deben configurarse VAPID_PUBLIC_KEY y VAPID_PRIVATE_KEY')
+
+const firebaseServiceAccountBase64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64?.trim() || ''
+const liveEnabled = Boolean(firebaseServiceAccountBase64)
+if (liveEnabled) {
+  const serviceAccount = JSON.parse(Buffer.from(firebaseServiceAccountBase64, 'base64').toString('utf8'))
+  initializeApp({ credential: cert(serviceAccount) })
+} else console.warn('"Ver ahora" desactivado: falta FIREBASE_SERVICE_ACCOUNT_BASE64')
+
+const LIVE_REQUEST_TTL_MS = 60_000
+type LiveRequest = { tutorId: string, usuarioId: string, status: 'pending' | 'done' | 'expired', lat?: number, lng?: number, createdAt: number }
+const liveRequests = new Map<string, LiveRequest>()
+function pruneLiveRequests() {
+  const cutoff = Date.now() - 5 * 60_000
+  for (const [id, entry] of liveRequests) if (entry.createdAt < cutoff) liveRequests.delete(id)
+}
 
 type AuthRequest = express.Request & { user?: { id: string, role: Role, privacyAcceptedAt: Date | null, consentVersion: string | null } }
 const publicUser = { id: true, email: true, name: true, role: true, active: true, privacyAcceptedAt: true, consentVersion: true, timezone: true, createdAt: true } as const
@@ -101,7 +119,7 @@ async function sendPushToUser(userId: string, message: { title: string, body: st
   }
 }
 
-app.get('/api/health', async (_req, res) => { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true, pushEnabled }) })
+app.get('/api/health', async (_req, res) => { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true, pushEnabled, liveEnabled }) })
 app.post('/api/auth/register', async (req, res) => {
   const parsed = registerSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Revisa el nombre, correo y contraseña' })
@@ -319,6 +337,52 @@ app.post('/api/trips/events', authenticate, consentRequired, usuarioOnly, async 
   const message = EVENT_MESSAGES[parsed.data.type]
   await sendPushToUser(schedule.route.tutorId, { ...message, tag: `trip-${trip.id}-${parsed.data.type}` })
   res.json({ ok: true })
+})
+
+app.get('/api/live/config', (_req, res) => res.json({ enabled: liveEnabled }))
+app.post('/api/live/token', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
+  const parsed = z.object({ token: z.string().min(20).max(4096) }).safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Token no válido' })
+  await prisma.fcmToken.upsert({ where: { token: parsed.data.token }, update: { userId: req.user!.id }, create: { token: parsed.data.token, userId: req.user!.id } })
+  res.json({ ok: true })
+})
+app.post('/api/live/request', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  if (!liveEnabled) return res.status(503).json({ error: 'La ubicación bajo demanda todavía no está configurada en el servidor' })
+  const parsed = z.object({ usuarioId: z.string().uuid() }).safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Persona usuaria no válida' })
+  const link = await prisma.link.findUnique({ where: { tutorId_usuarioId: { tutorId: req.user!.id, usuarioId: parsed.data.usuarioId } } })
+  if (!link) return res.status(403).json({ error: 'Esa persona usuaria no está vinculada a tu cuenta' })
+  const tokens = await prisma.fcmToken.findMany({ where: { userId: parsed.data.usuarioId } })
+  if (!tokens.length) return res.status(404).json({ error: 'Esa persona usuaria no tiene la aplicación con las notificaciones activadas' })
+  pruneLiveRequests()
+  const requestId = randomUUID()
+  const createdAt = Date.now()
+  liveRequests.set(requestId, { tutorId: req.user!.id, usuarioId: parsed.data.usuarioId, status: 'pending', createdAt })
+  await Promise.all(tokens.map(async token => {
+    try {
+      await getMessaging().send({ token: token.token, data: { type: 'LOCATE_REQUEST', requestId }, android: { priority: 'high' } })
+    } catch (cause) {
+      const code = typeof cause === 'object' && cause && 'code' in cause ? String(cause.code) : ''
+      if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') await prisma.fcmToken.delete({ where: { id: token.id } }).catch(() => undefined)
+      else console.error('No se pudo enviar el mensaje de ubicación', cause)
+    }
+  }))
+  res.json({ requestId, expiresAt: new Date(createdAt + LIVE_REQUEST_TTL_MS).toISOString() })
+})
+app.post('/api/live/location', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
+  const parsed = z.object({ requestId: z.string().uuid(), lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }).safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Datos no válidos' })
+  const entry = liveRequests.get(parsed.data.requestId)
+  if (!entry || entry.usuarioId !== req.user!.id) return res.status(404).json({ error: 'Solicitud no encontrada' })
+  if (Date.now() - entry.createdAt > LIVE_REQUEST_TTL_MS) { entry.status = 'expired'; return res.status(410).json({ error: 'La solicitud ha caducado' }) }
+  entry.status = 'done'; entry.lat = parsed.data.lat; entry.lng = parsed.data.lng
+  res.json({ ok: true })
+})
+app.get('/api/live/:requestId', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const entry = liveRequests.get(String(req.params.requestId))
+  if (!entry || entry.tutorId !== req.user!.id) return res.status(404).json({ error: 'Solicitud no encontrada' })
+  if (entry.status === 'pending' && Date.now() - entry.createdAt > LIVE_REQUEST_TTL_MS) entry.status = 'expired'
+  res.json({ status: entry.status, lat: entry.lat, lng: entry.lng })
 })
 
 app.use(express.static(path.join(root, 'dist')))
