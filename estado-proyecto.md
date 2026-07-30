@@ -4,15 +4,13 @@
 
 App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuidadora programa una ruta y un horario habituales para una persona acompañada (persona con discapacidad intelectual, o hijo/a de 9-16 años), y recibe avisos de salida, llegada y desvío del camino. Novedad añadida durante el diseño: también avisará si la persona no ha llegado a la hora prevista aunque no se haya desviado (se ha quedado parada).
 
-## Situación actual — 29 de julio de 2026
+## Situación actual — 30 de julio de 2026
 
-- Repositorio: [github.com/lumigam/rutasegura](https://github.com/lumigam/rutasegura), rama `main`.
+- Repositorio: [github.com/lumigam/rutasegura](https://github.com/lumigam/rutasegura), rama `main`, último commit `8ce28d1`.
 - Desplegado en Easypanel (VPS Contabo), dominio `rutasegura.placeat.org` (DNS y SSL ya configurados), servicio `rutasegura` + base de datos `rutasegura-postgres`, puerto interno `3000`.
-- **M1 desplegado y confirmado funcionando por el usuario** (captura de pantalla del login real en `rutasegura.placeat.org`).
-- **M2 recién subido a GitHub (commit `b12bf7b`), pendiente de que el usuario le dé a "Implementar" en Easypanel para probarlo en real.**
-- Historial de commits de esta sesión:
-  - `dcc6b0e` — Bootstrap Ruta Segura: auth, legal/consent shell and Android skeleton (M1)
-  - `b12bf7b` — Apply PLACEAT visual identity and add M2: pairing, routes and schedules
+- **M1 y M2 desplegados y verificados en real** por el usuario (login, emparejamiento, dibujo de rutas con el mapa, todo probado en `rutasegura.placeat.org`).
+- **M3 (plugin nativo de geolocalización) y M4 (motor de avisos) recién subidos (commit `8ce28d1`), compilan correctamente en la CI de GitHub Actions, pero todavía NO se han probado en un dispositivo real ni redesplegado en Easypanel.** Ver la sección "M3/M4" más abajo para el detalle.
+- Historial de commits relevantes: `dcc6b0e` (M1), `b12bf7b` (identidad PLACEAT + M2), `8ce28d1` (M3+M4). El historial completo está en GitHub.
 
 ## Decisiones de arquitectura ya tomadas (no las repitas sin motivo)
 
@@ -93,6 +91,18 @@ App Android de PLACEAT (hermana de Pastillero Virtual): una persona tutora/cuida
 ## Resuelto: el mapa no se veía tras el fix de CSP por caché del navegador
 
 Confirmado por el usuario: era exactamente la hipótesis nº1 (caché del navegador con la CSP antigua). Con un refresco forzado (Ctrl+Shift+R) el mapa ya funciona correctamente contra `rutasegura.placeat.org`. No hace falta ninguna acción de código adicional por esto — el mapa, el buscador de dirección y el dibujo de la ruta quedan verificados en producción.
+
+## M3 (plugin nativo RouteGuard) y M4 (motor de avisos) — 30 de julio de 2026
+
+Construidos y subidos (`8ce28d1`). Sin Firebase — "ver ahora" queda deliberadamente fuera de esta pasada (PLACEAT no tiene proyecto Firebase todavía); todo lo demás no necesita ningún servicio externo nuevo.
+
+- **M3 — plugin nativo `RouteGuard`** (`android/app/src/main/java/org/placeat/rutasegura/`): calcado del plugin `NativeAlarms` de Pastillero (mismo patrón de permisos por alias, persistencia cifrada AES/GCM+AndroidKeystore, BroadcastReceiver → Service en primer plano, restauración tras reinicio). Geovallas en origen/destino de cada ruta; un servicio en primer plano (`foregroundServiceType="location"`) que solo corre mientras dura un trayecto y comprueba la distancia punto-a-corredor (3 muestras seguidas fuera antes de avisar de un desvío, para no disparar por rebote del GPS). El dispositivo informa de los eventos con una simple llamada HTTPS autenticada al backend — no hace falta que nadie lo "despierte" desde fuera, porque el propio servicio en primer plano ya mantiene el proceso vivo mientras dura el trayecto.
+  - Ficheros: `RouteGuardPlugin.java` (superficie JS), `RouteGuardScheduler.java` (geovallas), `RouteGuardStore.java` (persistencia cifrada), `GeofenceBroadcastReceiver.java` (recibe transiciones, comprueba si "ahora" cae dentro de la ventana horaria de algún horario antes de tratarlo como real), `RouteGuardService.java` (seguimiento + cálculo de desvío), `RouteGuardGeometry.java` (distancia punto-a-polilínea), `RouteGuardApi.java` (POST directo a `/api/trips/events`), `BootReceiver.java`.
+  - `src/routeGuard.ts`: puente JS, usado desde `UsuarioRoutes` en `Routes.tsx` (sincroniza sesión+rutas, pantalla de permisos de ubicación).
+- **M4 — motor de avisos** (`server/index.ts`, `server/schedule.ts` nuevo): `POST /api/trips/events` (el dispositivo informa DEPARTED/ARRIVED/DEVIATED/SOS, resuelve el `Trip` del día de forma idempotente); intervalo cada 60s `checkScheduleAlerts()` cubre los dos casos que no vienen del dispositivo: "no ha salido" (pasada la ventana sin evento DEPARTED) y "no ha llegado" (calculado desde la hora **real** de salida cuando existe, no la programada — el refinamiento que pediste el 30 de julio, para que una salida tardía no dispare un aviso de retraso antes de tiempo). Los 4 avisos reutilizan el Web Push (VAPID) ya construido en M1 — ningún sistema de credenciales push nuevo.
+- **Verificación**: TypeScript (frontend+backend) y `vite build` limpios, igual que siempre. Para el lado Java, esta máquina no tiene JDK/SDK de Android instalados, así que no pude compilar ni probar nada localmente — la única señal de compilación ha sido el workflow `android.yml` de GitHub Actions tras el push, que **ha compilado, pasado el lint y generado tanto el APK de depuración como el AAB de release sin errores** (`gh run watch` sobre la ejecución del commit `8ce28d1`). Sigue pendiente la prueba real en un teléfono: permisos, disparo real de las geovallas al caminar, notificación del servicio en primer plano, desvío, y que sobreviva a un reinicio — de eso solo puedes dar fe tú con el APK instalado.
+- El usuario ofreció instalar Android Studio en este mismo equipo; si lo hace, tendría JDK+SDK+Gradle disponibles aquí y podría añadirse una comprobación local (`cd android && ./gradlew compileDebugJavaWithJavac`) antes de cada push, en vez de depender solo de la CI.
+- Pendiente explícitamente para cuando exista un proyecto Firebase de PLACEAT: **"ver ahora"** (despertar bajo demanda el móvil de la persona usuaria para una localización puntual).
 
 ## Cómo continuar en una nueva sesión
 
