@@ -101,7 +101,17 @@ Construidos y subidos (`8ce28d1`). Sin Firebase — "ver ahora" queda deliberada
   - `src/routeGuard.ts`: puente JS, usado desde `UsuarioRoutes` en `Routes.tsx` (sincroniza sesión+rutas, pantalla de permisos de ubicación).
 - **M4 — motor de avisos** (`server/index.ts`, `server/schedule.ts` nuevo): `POST /api/trips/events` (el dispositivo informa DEPARTED/ARRIVED/DEVIATED/SOS, resuelve el `Trip` del día de forma idempotente); intervalo cada 60s `checkScheduleAlerts()` cubre los dos casos que no vienen del dispositivo: "no ha salido" (pasada la ventana sin evento DEPARTED) y "no ha llegado" (calculado desde la hora **real** de salida cuando existe, no la programada — el refinamiento que pediste el 30 de julio, para que una salida tardía no dispare un aviso de retraso antes de tiempo). Los 4 avisos reutilizan el Web Push (VAPID) ya construido en M1 — ningún sistema de credenciales push nuevo.
 - **Verificación**: TypeScript (frontend+backend) y `vite build` limpios, igual que siempre. Para el lado Java, esta máquina no tiene JDK/SDK de Android instalados, así que no pude compilar ni probar nada localmente — la única señal de compilación ha sido el workflow `android.yml` de GitHub Actions tras el push, que **ha compilado, pasado el lint y generado tanto el APK de depuración como el AAB de release sin errores** (`gh run watch` sobre la ejecución del commit `8ce28d1`). Sigue pendiente la prueba real en un teléfono: permisos, disparo real de las geovallas al caminar, notificación del servicio en primer plano, desvío, y que sobreviva a un reinicio — de eso solo puedes dar fe tú con el APK instalado.
-- El usuario ofreció instalar Android Studio en este mismo equipo; si lo hace, tendría JDK+SDK+Gradle disponibles aquí y podría añadirse una comprobación local (`cd android && ./gradlew compileDebugJavaWithJavac`) antes de cada push, en vez de depender solo de la CI.
+- **Actualización 30 de julio, misma tarde**: el usuario ya tenía Android Studio instalado. Ahora hay compilación local funcionando de verdad:
+  - JDK: `C:\Program Files\Android\Android Studio\jbr` · SDK: `%LOCALAPPDATA%\Android\Sdk` (build-tools 36.0.0/35.0.0, platform android-36).
+  - El JBR no confiaba en el certificado de alguna inspección TLS de la red/antivirus de este equipo (`PKIX path building failed` al descargar dependencias). Solución sin necesitar permisos de administrador: se copió `cacerts` a `%USERPROFILE%\.android-cacerts-with-winroot` (no se tocó el original, protegido) y se importaron ahí los 56 certificados de `Cert:\LocalMachine\Root` con `keytool`.
+  - Para compilar en PowerShell:
+    ```powershell
+    $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+    $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+    $env:GRADLE_OPTS = "-Djavax.net.ssl.trustStore=$env:USERPROFILE\.android-cacerts-with-winroot -Djavax.net.ssl.trustStorePassword=changeit"
+    cd "P:\PR\PRUEBAS\Ruta Segura\android"; .\gradlew.bat compileDebugJavaWithJavac
+    ```
+  - `compileDebugJavaWithJavac` → **BUILD SUCCESSFUL**, confirmando en local (no solo en la CI) que el plugin `RouteGuard` compila.
 - Pendiente explícitamente para cuando exista un proyecto Firebase de PLACEAT: **"ver ahora"** (despertar bajo demanda el móvil de la persona usuaria para una localización puntual).
 
 ## Cómo continuar en una nueva sesión
