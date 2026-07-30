@@ -4,9 +4,13 @@ import 'leaflet/dist/leaflet.css'
 import { Check, ChevronRight, MapPin, Plus, Trash2, X } from './icons'
 import {
   claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
-  generatePairingCode, loadLinkedUsuarios, loadMyRoutes, loadRoutes, unlinkUsuario, updateRoute, updateSchedule,
+  generatePairingCode, getApiOrigin, getSessionToken, loadLinkedUsuarios, loadMyRoutes, loadRoutes, unlinkUsuario, updateRoute, updateSchedule,
   type ScheduleInput,
 } from './storage'
+import {
+  getRouteGuardStatus, isNativeAndroid, openLocationSettings, requestBackgroundLocation, requestForegroundLocation,
+  syncRouteGuardRoutes, updateRouteGuardSession, type RouteGuardStatus,
+} from './routeGuard'
 import type { LatLng, LinkedUsuario, Route, Schedule, UserAccount, Weekday } from './types'
 
 const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -296,12 +300,50 @@ function ScheduleForm({ routeId, initial, onClose, onSaved }: { routeId: string,
   </div></div>
 }
 
+function LocationPermissionCard() {
+  const [status, setStatus] = useState<RouteGuardStatus | null>(null)
+  const [error, setError] = useState('')
+  const refresh = () => getRouteGuardStatus().then(setStatus).catch(() => undefined)
+  useEffect(() => { if (isNativeAndroid()) refresh() }, [])
+  if (!isNativeAndroid()) return null
+
+  const activateForeground = async () => {
+    try { setStatus(await requestForegroundLocation()) } catch { setError('No se pudo pedir el permiso de ubicación') }
+  }
+  const activateBackground = async () => {
+    try {
+      const current = await requestBackgroundLocation()
+      setStatus(current)
+      if (!current.backgroundLocation) {
+        window.alert('En la pantalla que se abrirá, elige "Permitir todo el tiempo" para que el seguimiento funcione con la aplicación cerrada.')
+        await openLocationSettings()
+      }
+    } catch { setError('No se pudo pedir el permiso de ubicación') }
+  }
+
+  return <section className="profile-card">
+    <h2>Ubicación</h2>
+    <p>Necesaria para avisar de salida, llegada y desvío del camino.</p>
+    {!status?.foregroundLocation && <button className="secondary-button" onClick={activateForeground}>Activar ubicación</button>}
+    {status?.foregroundLocation && !status.backgroundLocation && <button className="secondary-button" onClick={activateBackground}>Permitir en segundo plano</button>}
+    {status?.foregroundLocation && status.backgroundLocation && <div className="alerts-ready" role="status"><MapPin /><span><strong>Ubicación activada</strong><small>El seguimiento de tu ruta está listo.</small></span></div>}
+    {error && <div className="form-error">{error}</div>}
+  </section>
+}
+
 export function UsuarioRoutes() {
   const [routes, setRoutes] = useState<Route[]>([])
   const [loaded, setLoaded] = useState(false)
   useEffect(() => { loadMyRoutes().then(r => { setRoutes(r); setLoaded(true) }).catch(() => setLoaded(true)) }, [])
+  useEffect(() => {
+    if (!loaded || !isNativeAndroid()) return
+    const token = getSessionToken()
+    if (token) void updateRouteGuardSession(token, getApiOrigin())
+    void syncRouteGuardRoutes(routes)
+  }, [loaded, routes])
 
   return <div className="usuario-routes">
+    <LocationPermissionCard />
     <PairingCard role="USUARIO" />
     {loaded && routes.length > 0 && <div className="route-list">
       {routes.map(route => <div className="route-row" key={route.id}>

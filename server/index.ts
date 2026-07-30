@@ -2,7 +2,7 @@ import 'express-async-errors'
 import express from 'express'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
-import { PrismaClient, Role } from '@prisma/client'
+import { PrismaClient, Role, TripStatus } from '@prisma/client'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
@@ -10,6 +10,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import webpush from 'web-push'
 import { decryptValue, encryptValue } from './crypto.js'
+import { localScheduleParts, scheduledInstant } from './schedule.js'
 
 const prisma = new PrismaClient()
 const app = express()
@@ -84,6 +85,21 @@ function randomPairingCode() {
   return code
 }
 function decryptRoute<T extends { label: string }>(item: T) { return { ...item, label: decryptValue(item.label) } }
+
+async function sendPushToUser(userId: string, message: { title: string, body: string, tag: string }) {
+  if (!pushEnabled) return
+  const subscriptions = await prisma.pushSubscription.findMany({ where: { userId } })
+  const payload = JSON.stringify({ title: message.title, body: message.body, tag: message.tag, url: '/' })
+  for (const subscription of subscriptions) {
+    try {
+      await webpush.sendNotification({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }, payload, { TTL: 300, urgency: 'high' })
+    } catch (cause) {
+      const statusCode = typeof cause === 'object' && cause && 'statusCode' in cause ? Number(cause.statusCode) : 0
+      if (statusCode === 404 || statusCode === 410) await prisma.pushSubscription.delete({ where: { id: subscription.id } }).catch(() => undefined)
+      else console.error('No se pudo enviar un aviso push', cause)
+    }
+  }
+}
 
 app.get('/api/health', async (_req, res) => { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true, pushEnabled }) })
 app.post('/api/auth/register', async (req, res) => {
@@ -269,6 +285,42 @@ app.delete('/api/schedules/:id', authenticate, consentRequired, tutorOnly, async
   res.json({ ok: true })
 })
 
+const tripEventSchema = z.object({
+  scheduleId: z.string().uuid(),
+  type: z.enum(['DEPARTED', 'ARRIVED', 'DEVIATED', 'SOS']),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+})
+const EVENT_MESSAGES: Record<string, { title: string, body: string }> = {
+  DEPARTED: { title: '📍 Ha salido', body: 'Ha salido de camino según lo programado.' },
+  ARRIVED: { title: '✅ Ha llegado', body: 'Ha llegado a su destino.' },
+  DEVIATED: { title: '⚠️ Se ha desviado', body: 'Parece que se ha apartado del camino habitual.' },
+  SOS: { title: '🆘 Aviso urgente', body: 'Se ha activado un aviso de ayuda.' },
+}
+app.post('/api/trips/events', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
+  const parsed = tripEventSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Evento no válido' })
+  const schedule = await prisma.schedule.findFirst({
+    where: { id: parsed.data.scheduleId, route: { usuarioId: req.user!.id } },
+    include: { route: { include: { usuario: true } } },
+  })
+  if (!schedule) return res.status(404).json({ error: 'Horario no encontrado' })
+  const scheduledFor = scheduledInstant(new Date(), schedule.route.usuario.timezone, schedule.time)
+  const trip = await prisma.trip.upsert({
+    where: { scheduleId_scheduledFor: { scheduleId: schedule.id, scheduledFor } },
+    update: {}, create: { routeId: schedule.routeId, scheduleId: schedule.id, scheduledFor },
+  })
+  const data: { status?: TripStatus, startedAt?: Date, endedAt?: Date } = {}
+  if (parsed.data.type === 'DEPARTED' && trip.status === TripStatus.NOT_STARTED) { data.status = TripStatus.IN_PROGRESS; data.startedAt = new Date() }
+  else if (parsed.data.type === 'ARRIVED') { data.status = TripStatus.ARRIVED; data.endedAt = new Date() }
+  else if (parsed.data.type === 'DEVIATED' && trip.status !== TripStatus.ARRIVED) { data.status = TripStatus.DEVIATED }
+  if (Object.keys(data).length) await prisma.trip.update({ where: { id: trip.id }, data })
+  await prisma.tripEvent.create({ data: { tripId: trip.id, type: parsed.data.type, lat: parsed.data.lat, lng: parsed.data.lng } })
+  const message = EVENT_MESSAGES[parsed.data.type]
+  await sendPushToUser(schedule.route.tutorId, { ...message, tag: `trip-${trip.id}-${parsed.data.type}` })
+  res.json({ ok: true })
+})
+
 app.use(express.static(path.join(root, 'dist')))
 app.get('*', (_req, res) => res.sendFile(path.join(root, 'dist', 'index.html')))
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -293,9 +345,61 @@ async function ensureAdmin() {
   }
 }
 
+let scheduleCheckRunning = false
+async function checkScheduleAlerts() {
+  if (!pushEnabled || scheduleCheckRunning) return
+  scheduleCheckRunning = true
+  try {
+    const now = new Date()
+    const schedules = await prisma.schedule.findMany({
+      where: { active: true, route: { active: true } },
+      include: { route: { include: { usuario: true } } },
+    })
+    for (const schedule of schedules) {
+      const timezone = schedule.route.usuario.timezone
+      const local = localScheduleParts(now, timezone)
+      if (!schedule.days.includes(local.day)) continue
+      const scheduledFor = scheduledInstant(now, timezone, schedule.time)
+      const trip = await prisma.trip.upsert({
+        where: { scheduleId_scheduledFor: { scheduleId: schedule.id, scheduledFor } },
+        update: {}, create: { routeId: schedule.routeId, scheduleId: schedule.id, scheduledFor },
+        include: { events: true },
+      })
+      if (trip.events.some(event => event.type === 'DELAYED')) continue
+
+      const notDepartedDeadline = new Date(scheduledFor.getTime() + schedule.windowMinutesAfter * 60_000)
+      if (trip.status === TripStatus.NOT_STARTED && now > notDepartedDeadline) {
+        await prisma.$transaction([
+          prisma.trip.update({ where: { id: trip.id }, data: { status: TripStatus.DELAYED } }),
+          prisma.tripEvent.create({ data: { tripId: trip.id, type: 'DELAYED' } }),
+        ])
+        await sendPushToUser(schedule.route.tutorId, { title: '⏰ No ha salido', body: 'No ha salido todavía a la hora prevista.', tag: `trip-${trip.id}-no-departure` })
+        continue
+      }
+
+      if (trip.status === TripStatus.IN_PROGRESS && schedule.estimatedArrivalMinutes != null) {
+        const base = trip.startedAt ?? scheduledFor
+        const deadline = new Date(base.getTime() + (schedule.estimatedArrivalMinutes + schedule.arrivalToleranceMinutes) * 60_000)
+        if (now > deadline) {
+          await prisma.$transaction([
+            prisma.trip.update({ where: { id: trip.id }, data: { status: TripStatus.DELAYED } }),
+            prisma.tripEvent.create({ data: { tripId: trip.id, type: 'DELAYED' } }),
+          ])
+          const lateMinutes = trip.startedAt ? Math.round((trip.startedAt.getTime() - scheduledFor.getTime()) / 60_000) : 0
+          const expected = new Date(deadline.getTime()).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: timezone })
+          const body = lateMinutes > 0 ? `Aún no ha llegado. Salió ${lateMinutes} min tarde, se esperaba sobre las ${expected}.` : 'Aún no ha llegado a la hora prevista.'
+          await sendPushToUser(schedule.route.tutorId, { title: '⏰ Retraso en la llegada', body, tag: `trip-${trip.id}-delayed-arrival` })
+        }
+      }
+    }
+  } finally { scheduleCheckRunning = false }
+}
+
 async function start() {
   await prisma.$connect()
   await ensureAdmin()
   app.listen(port, '0.0.0.0', () => console.log(`Ruta Segura escuchando en el puerto ${port}`))
+  void checkScheduleAlerts()
+  setInterval(() => void checkScheduleAlerts(), 60_000)
 }
 start().catch(error => { console.error('No se pudo iniciar la aplicación', error); process.exit(1) })

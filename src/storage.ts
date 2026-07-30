@@ -9,6 +9,9 @@ export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message) }
 }
 
+export const getSessionToken = () => localStorage.getItem(TOKEN_KEY)
+export const getApiOrigin = () => API_ORIGIN || window.location.origin
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem(TOKEN_KEY)
   const response = await fetch(`${API_ORIGIN}${url}`, {

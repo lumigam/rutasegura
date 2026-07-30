@@ -3,6 +3,7 @@ import { BrandMark, ChevronRight, Home as HomeIcon, MapPin, ShieldCheck, Trash2 
 import { ApiError, acceptLegalConsent, currentUser, deleteOwnAccount, exportAccountData, login, logout, register } from './storage'
 import { ConsentScreen, CookieBanner, LegalFooter, LegalPage, legalKindFromPath } from './Legal'
 import { RoutesView, UsuarioRoutes } from './Routes'
+import { isNativeAndroid, stopRouteGuard } from './routeGuard'
 import { LEGAL_CONSENT_VERSION, type UserAccount } from './types'
 
 type Tab = 'home' | 'routes' | 'profile'
@@ -22,6 +23,7 @@ function App() {
 
   const signOut = () => {
     if (!window.confirm('¿Cerrar sesión?')) return
+    if (user.role === 'USUARIO' && isNativeAndroid()) void stopRouteGuard().catch(() => undefined)
     logout(); setUser(null); setTab('home')
   }
   const initials = user.name.split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase()
