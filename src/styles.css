@@ -205,12 +205,29 @@ legend { margin-bottom: 11px; padding: 0; font-size: 12.5px; font-weight: 600; c
 .map-search input { margin-top: 0; flex: 1; }
 .map-search button { flex: 0 0 auto; border: 0; background: var(--brand); color: white; border-radius: 12px; padding: 0 18px; font-weight: 600; }
 .map-search button:disabled { opacity: .6; }
-.search-results { list-style: none; margin: -4px 0 10px; padding: 6px; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 12px; max-height: 180px; overflow: auto; background: var(--surface); }
-.search-results button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 8px; font-size: 13px; color: var(--ink); }
-.search-results button:hover { background: var(--brand-light); }
+.search-results { list-style: none; margin: -4px 0 10px; padding: 6px; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 12px; max-height: 210px; overflow: auto; background: var(--surface); }
+.search-results li { display: flex; align-items: center; gap: 6px; }
+.search-result-name { flex: 1; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 8px; font-size: 13px; color: var(--ink); }
+.search-result-name:hover { background: var(--brand-light); }
+.search-result-action { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 10px; border: 1.5px solid var(--brand); background: var(--surface); color: var(--brand); font-weight: 700; font-size: 14px; }
+.search-result-action:hover { background: var(--brand); color: white; }
+.map-matched { font-size: 12px; color: var(--sub); margin: 0 0 8px; }
 .route-map { height: 420px; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); margin-bottom: 10px; }
-.route-map-actions { display: flex; gap: 16px; margin-bottom: 20px; }
-.route-pin span { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--brand); color: white; font-size: 10px; font-weight: 700; border: 2px solid white; box-shadow: 0 2px 8px #00000055; }
+.route-map-actions { display: flex; gap: 16px; margin-bottom: 16px; }
+.route-pin span { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--brand-deep); color: white; font-size: 11px; font-weight: 700; border: 2.5px solid white; box-shadow: 0 2px 8px #00000066; }
+.route-summary { font-size: 14px; font-weight: 600; color: var(--brand-deep); background: var(--brand-light); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; }
+
+.editor-step { border-top: 1px solid var(--line); padding-top: 20px; margin-bottom: 24px; }
+.editor-step:first-child { border-top: 0; padding-top: 0; }
+.editor-step > h2 { display: flex; align-items: center; gap: 10px; font-size: 19px; margin: 0 0 14px; }
+.step-number { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%; background: var(--brand); color: white; font-size: 13px; font-weight: 700; }
+.field-hint { display: block; font-weight: 400; font-size: 12px; color: var(--sub); margin-top: 5px; }
+
+.endpoint-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.endpoint-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.endpoint-badge { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%; background: var(--brand-deep); color: white; font-size: 12px; font-weight: 700; }
+.endpoint-text { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.endpoint-text em { color: var(--sub); }
 .route-list { background: var(--surface); border: 1px solid var(--line); border-radius: 19px; overflow: hidden; margin-top: 18px; }
 .route-row { width: 100%; display: grid; grid-template-columns: 40px 1fr auto; gap: 14px; align-items: center; padding: 16px 18px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .route-row:last-child { border-bottom: 0; }

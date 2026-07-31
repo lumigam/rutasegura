@@ -19,8 +19,19 @@ const ALL_DAYS: Weekday[] = [0, 1, 2, 3, 4, 5, 6]
 const PLASENCIA: LatLng = { lat: 40.0298, lng: -6.0844 }
 
 type SearchResult = { lat: string, lon: string, display_name: string, type: string }
+type MapMarker = { point: LatLng, label: string }
+type ResultAction = { label: string, onPick: (point: LatLng, name: string) => void }
 
-function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { points: LatLng[], corridorWidthMeters: number, editable: boolean, onAddPoint?: (point: LatLng) => void }) {
+/** Leaflet stroke width is in pixels, so a corridor expressed in metres has to be re-derived whenever the zoom changes. */
+function corridorPixelWidth(map: L.Map, meters: number, lat: number) {
+  const metersPerPixel = 40075016.686 * Math.abs(Math.cos(lat * Math.PI / 180)) / Math.pow(2, map.getZoom() + 8)
+  return Math.min(Math.max((meters * 2) / metersPerPixel, 11), 1000)
+}
+
+function RouteMap({ points, markers, corridorWidthMeters, editable, onAddPoint, resultActions }: {
+  points: LatLng[], markers: MapMarker[], corridorWidthMeters: number,
+  editable: boolean, onAddPoint?: (point: LatLng) => void, resultActions?: ResultAction[],
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const layerRef = useRef<L.LayerGroup | null>(null)
@@ -30,25 +41,25 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
+  const [matched, setMatched] = useState('')
 
-  const search = async (event: React.FormEvent) => {
-    event.preventDefault()
-    if (!query.trim() || searching) return
-    setSearching(true); setSearchError(''); setResults([])
-    try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=es&limit=5&q=${encodeURIComponent(query)}`)
-      const found = await response.json() as SearchResult[]
-      if (!found.length) { setSearchError('No se ha encontrado ese lugar'); return }
-      if (found.length === 1) pickResult(found[0])
-      else setResults(found)
-    } catch { setSearchError('No se pudo buscar el lugar') }
-    finally { setSearching(false) }
+  const centreOn = (result: SearchResult) => {
+    const precise = ['house', 'building', 'residential', 'road', 'pedestrian', 'address'].includes(result.type)
+    mapRef.current?.setView([Number(result.lat), Number(result.lon)], precise ? 17 : 14)
+    setMatched(precise ? `Mostrando: ${result.display_name}` : `Solo se ha encontrado la localidad: ${result.display_name}. Acerca el mapa y toca el punto exacto.`)
   }
 
-  const pickResult = (result: SearchResult) => {
-    const precise = ['house', 'building', 'residential', 'road', 'pedestrian', 'address'].includes(result.type)
-    mapRef.current?.setView([Number(result.lat), Number(result.lon)], precise ? 18 : 14)
-    setResults([])
+  const search = async () => {
+    if (!query.trim() || searching) return
+    setSearching(true); setSearchError(''); setResults([]); setMatched('')
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=es&limit=6&q=${encodeURIComponent(query)}`)
+      const found = await response.json() as SearchResult[]
+      if (!found.length) { setSearchError('No se ha encontrado ese lugar. Prueba con "calle, número, localidad".'); return }
+      setResults(found)
+      centreOn(found[0])
+    } catch { setSearchError('No se pudo buscar el lugar') }
+    finally { setSearching(false) }
   }
 
   useEffect(() => {
@@ -64,29 +75,55 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
   useEffect(() => {
     const map = mapRef.current, layer = layerRef.current
     if (!map || !layer) return
-    layer.clearLayers()
-    if (points.length) {
+    const draw = () => {
+      layer.clearLayers()
       const latlngs = points.map(p => [p.lat, p.lng]) as [number, number][]
-      if (points.length > 1) L.polyline(latlngs, { color: '#3f74b3', weight: 4, opacity: .85 }).addTo(layer)
-      points.forEach((p, index) => {
-        L.circle([p.lat, p.lng], { radius: corridorWidthMeters, color: '#3f74b3', weight: 1, opacity: .35, fillOpacity: .08 }).addTo(layer)
-        const label = points.length === 2 ? (index === 0 ? 'Origen' : 'Destino') : String(index + 1)
-        L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'route-pin', html: `<span>${label}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(layer)
+      if (latlngs.length > 1) {
+        // The safety corridor is one continuous band under the route, never one circle per point:
+        // an auto-generated car route has hundreds of points and would bury the map.
+        L.polyline(latlngs, { color: '#3f74b3', weight: corridorPixelWidth(map, corridorWidthMeters, points[0].lat), opacity: .18, lineCap: 'round', lineJoin: 'round' }).addTo(layer)
+        L.polyline(latlngs, { color: '#16305c', weight: 4, opacity: .9 }).addTo(layer)
+      }
+      markers.forEach(marker => {
+        L.marker([marker.point.lat, marker.point.lng], {
+          icon: L.divIcon({ className: 'route-pin', html: `<span>${marker.label}</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }),
+        }).addTo(layer)
       })
-      if (points.length > 1) map.fitBounds(latlngs, { padding: [30, 30] })
-      else map.setView(latlngs[0], Math.max(map.getZoom(), 16))
     }
-  }, [points, corridorWidthMeters])
+    draw()
+    map.on('zoomend', draw)
+    return () => { map.off('zoomend', draw) }
+  }, [points, markers, corridorWidthMeters])
+
+  const fittedRef = useRef('')
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || points.length < 2) return
+    const key = `${points.length}:${points[0].lat},${points[0].lng}:${points[points.length - 1].lat},${points[points.length - 1].lng}`
+    if (fittedRef.current === key) return
+    fittedRef.current = key
+    map.fitBounds(points.map(p => [p.lat, p.lng]) as [number, number][], { padding: [30, 30] })
+  }, [points])
 
   return <>
-    <form className="map-search" onSubmit={search} autoComplete="off">
-      <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Ej. Calle Mayorga 1, Plasencia" name="route-map-search-query" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
-      <button type="submit" disabled={searching}>{searching ? '…' : 'Buscar'}</button>
-    </form>
+    {/* Deliberately not a <form>: this sits inside the route editor's form and nesting forms is invalid HTML
+        (pressing Enter here would submit the outer form and create the route half-finished). */}
+    <div className="map-search">
+      <input value={query} onChange={e => setQuery(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void search() } }}
+        placeholder="Ej. Calle Mayorga 1, Plasencia" name="route-map-search-query"
+        autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
+      <button type="button" onClick={() => void search()} disabled={searching}>{searching ? '…' : 'Buscar'}</button>
+    </div>
     {searchError && <div className="form-error">{searchError}</div>}
     {results.length > 0 && <ul className="search-results">
-      {results.map((result, index) => <li key={index}><button type="button" onClick={() => pickResult(result)}>{result.display_name}</button></li>)}
+      {results.map((result, index) => <li key={index}>
+        <button type="button" className="search-result-name" onClick={() => centreOn(result)}>{result.display_name}</button>
+        {resultActions?.map(action => <button key={action.label} type="button" className="search-result-action"
+          onClick={() => { action.onPick({ lat: Number(result.lat), lng: Number(result.lon) }, result.display_name); setResults([]); setMatched('') }}>{action.label}</button>)}
+      </li>)}
     </ul>}
+    {matched && <p className="map-matched">{matched}</p>}
     <div ref={containerRef} className="route-map" style={{ cursor: editable ? 'crosshair' : 'grab' }} />
   </>
 }
@@ -232,6 +269,9 @@ export function RoutesView() {
   </div>
 }
 
+type Endpoint = { point: LatLng, name: string }
+const coordName = (point: LatLng) => `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`
+
 function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route | null, usuarios: LinkedUsuario[], onClose: () => void, onSaved: () => void }) {
   const [usuarioId, setUsuarioId] = useState(initial?.usuarioId ?? usuarios[0]?.id ?? '')
   const [label, setLabel] = useState(initial?.label ?? '')
@@ -247,49 +287,81 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
   const [directionsEnabled, setDirectionsEnabled] = useState(false)
   const [drawMode, setDrawMode] = useState<'manual' | 'auto'>('manual')
   const [calculating, setCalculating] = useState(false)
+  const [origin, setOrigin] = useState<Endpoint | null>(null)
+  const [destination, setDestination] = useState<Endpoint | null>(null)
+  const [summary, setSummary] = useState('')
   useEffect(() => { getDirectionsConfig().then(c => setDirectionsEnabled(c.enabled)).catch(() => undefined) }, [])
+
+  // A brand-new route also captures its first schedule here, so "puntual o programada" is visible while creating it
+  // instead of being hidden behind a save the tutor may never reach.
+  const [scheduleKind, setScheduleKind] = useState<Schedule['kind']>('WEEKLY')
+  const [days, setDays] = useState<Weekday[]>([1, 2, 3, 4, 5])
+  const [time, setTime] = useState('18:00')
+  const [windowMinutesAfter, setWindowMinutesAfter] = useState(45)
+  const [estimatedArrivalMinutes, setEstimatedArrivalMinutes] = useState('')
+  const toggleDay = (day: Weekday) => setDays(current => current.includes(day) ? current.filter(d => d !== day) : [...current, day].sort())
 
   const setMode = (next: TravelMode) => {
     setModeState(next)
     if (!savedRouteId) setCorridorWidthMeters(next === 'CAR' ? 250 : 75)
   }
 
-  const [autoPicks, setAutoPicks] = useState<LatLng[]>([])
-  const calculateAuto = async (origin: LatLng, destination: LatLng) => {
-    setCalculating(true); setError('')
-    try { setPoints((await calculateDirections(mode, origin, destination)).points) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo calcular la ruta entre esos dos puntos'); setPoints([origin, destination]) }
-    finally { setCalculating(false); setAutoPicks([]) }
+  const runDirections = async (from: Endpoint, to: Endpoint) => {
+    setCalculating(true); setError(''); setSummary('')
+    try {
+      const result = await calculateDirections(mode, from.point, to.point)
+      setPoints(result.points)
+      const km = result.distanceMeters != null ? (result.distanceMeters / 1000).toFixed(1) : null
+      const min = result.durationSeconds != null ? Math.round(result.durationSeconds / 60) : null
+      setSummary(km && min ? `Ruta calculada: ${km} km · unos ${min} min ${mode === 'CAR' ? 'en coche' : 'a pie'}.` : 'Ruta calculada.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo calcular la ruta')
+      setPoints([])
+    } finally { setCalculating(false) }
   }
-  const addPoint = (point: LatLng) => {
+  const setEndpoint = (which: 'origin' | 'destination', endpoint: Endpoint | null) => {
+    const nextOrigin = which === 'origin' ? endpoint : origin
+    const nextDestination = which === 'destination' ? endpoint : destination
+    if (which === 'origin') setOrigin(endpoint); else setDestination(endpoint)
+    setSummary(''); setPoints([])
+    if (nextOrigin && nextDestination) void runDirections(nextOrigin, nextDestination)
+  }
+
+  const handleMapClick = (point: LatLng) => {
     if (drawMode === 'manual') { setPoints(current => [...current, point]); return }
-    setAutoPicks(current => {
-      if (current.length >= 2) return [point]
-      const next = [...current, point]
-      if (next.length === 2) void calculateAuto(next[0], next[1])
-      return next
-    })
+    if (!origin) setEndpoint('origin', { point, name: coordName(point) })
+    else if (!destination) setEndpoint('destination', { point, name: coordName(point) })
   }
-  const undoPoint = () => setPoints(current => current.slice(0, -1))
-  const clearPoints = () => { setPoints([]); setAutoPicks([]) }
   const switchDrawMode = (next: 'manual' | 'auto') => {
     if (next === drawMode) return
-    setDrawMode(next); setPoints([]); setAutoPicks([]); setError('')
+    setDrawMode(next); setPoints([]); setOrigin(null); setDestination(null); setError(''); setSummary('')
   }
+
+  const markers: MapMarker[] = drawMode === 'auto'
+    ? [...(origin ? [{ point: origin.point, label: 'A' }] : []), ...(destination ? [{ point: destination.point, label: 'B' }] : [])]
+    : points.map((point, index) => ({ point, label: String(index + 1) }))
+  const mapPoints = drawMode === 'auto' && points.length === 0 && origin && destination ? [origin.point, destination.point] : points
 
   const saveRoute = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!usuarioId) { setError('Selecciona a la persona usuaria'); return }
-    if (points.length < 2) { setError('Marca al menos dos puntos en el mapa'); return }
+    if (points.length < 2) { setError(drawMode === 'auto' ? 'Marca el origen y el destino para calcular la ruta' : 'Marca al menos dos puntos en el mapa'); return }
+    if (!savedRouteId && scheduleKind === 'WEEKLY' && !days.length) { setError('Selecciona al menos un día'); return }
     setBusy(true); setError('')
     try {
-      const saved = savedRouteId
-        ? await updateRoute(savedRouteId, { label, points, mode, corridorWidthMeters, active })
-        : await createRoute({ usuarioId, label, points, mode, corridorWidthMeters })
-      setSavedRouteId(saved.id)
-      setSchedules(saved.schedules)
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo guardar la ruta') }
-    finally { setBusy(false) }
+      if (savedRouteId) {
+        const saved = await updateRoute(savedRouteId, { label, points, mode, corridorWidthMeters, active })
+        setSchedules(saved.schedules)
+        onSaved()
+        return
+      }
+      const saved = await createRoute({ usuarioId, label, points, mode, corridorWidthMeters })
+      const base = { estimatedArrivalMinutes: estimatedArrivalMinutes ? Number(estimatedArrivalMinutes) : null, arrivalToleranceMinutes: 20, active: true }
+      await createSchedule(saved.id, scheduleKind === 'ONCE'
+        ? { kind: 'ONCE', windowMinutesBefore: 0, windowMinutesAfter, ...base }
+        : { kind: 'WEEKLY', days, time, windowMinutesBefore: 15, windowMinutesAfter, ...base })
+      onSaved()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo guardar la ruta'); setBusy(false) }
   }
 
   const removeRoute = async () => {
@@ -301,40 +373,98 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
   return <div className="modal-backdrop" role="presentation"><div className="sheet route-sheet" role="dialog" aria-modal="true" aria-labelledby="route-title">
     <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">RUTA</p><h1 id="route-title">{initial ? 'Editar ruta' : 'Nueva ruta'}</h1></div><span /></div>
     <div className="route-editor-body">
-      {directionsEnabled && <div className="option-toggle" role="group" aria-label="Cómo marcar el camino">
-        <button type="button" className={drawMode === 'manual' ? 'selected' : ''} onClick={() => switchDrawMode('manual')}>Dibujar a mano</button>
-        <button type="button" className={drawMode === 'auto' ? 'selected' : ''} onClick={() => switchDrawMode('auto')}>Calcular automáticamente</button>
-      </div>}
-      <p className="lede-note map-hint">{drawMode === 'manual'
-        ? 'Busca el punto de partida y luego toca el mapa para ir marcando el camino, punto a punto.'
-        : calculating ? 'Calculando la ruta entre los dos puntos…'
-        : autoPicks.length === 0 ? `Toca el mapa para marcar el origen (a pie o en coche: ${mode === 'CAR' ? 'en coche' : 'a pie'}).`
-        : autoPicks.length === 1 ? 'Origen marcado. Ahora toca el mapa para marcar el destino.'
-        : 'Ruta calculada. Puedes guardarla o volver a marcar los puntos.'}</p>
-      <RouteMap points={drawMode === 'auto' && (autoPicks.length > 0 || calculating) ? autoPicks : points} corridorWidthMeters={corridorWidthMeters} editable onAddPoint={addPoint} />
-      <div className="route-map-actions">
-        <button type="button" className="text-button" onClick={drawMode === 'manual' ? undoPoint : () => setAutoPicks([])} disabled={drawMode === 'manual' ? !points.length : !autoPicks.length}>{drawMode === 'manual' ? 'Deshacer último punto' : 'Empezar de nuevo'}</button>
-        <button type="button" className="text-button" onClick={clearPoints} disabled={!points.length && !autoPicks.length}>Borrar ruta</button>
-      </div>
-      <form onSubmit={saveRoute}>
+    <form onSubmit={saveRoute}>
+
+      <section className="editor-step">
+        <h2><span className="step-number">1</span> ¿Cómo se hace el trayecto?</h2>
+        <div className="option-toggle">
+          <button type="button" className={mode === 'WALK' ? 'selected' : ''} onClick={() => setMode('WALK')}>A pie</button>
+          <button type="button" className={mode === 'CAR' ? 'selected' : ''} onClick={() => setMode('CAR')}>En coche</button>
+        </div>
+      </section>
+
+      <section className="editor-step">
+        <h2><span className="step-number">2</span> El camino</h2>
+        {directionsEnabled && <div className="option-toggle" role="group" aria-label="Cómo marcar el camino">
+          <button type="button" className={drawMode === 'auto' ? 'selected' : ''} onClick={() => switchDrawMode('auto')}>De un punto a otro</button>
+          <button type="button" className={drawMode === 'manual' ? 'selected' : ''} onClick={() => switchDrawMode('manual')}>Dibujarlo a mano</button>
+        </div>}
+
+        {drawMode === 'auto' ? <>
+          <p className="lede-note">Busca una dirección y pulsa <strong>A</strong> para el origen o <strong>B</strong> para el destino. También puedes tocar el mapa directamente.</p>
+          <div className="endpoint-list">
+            <div className="endpoint-row">
+              <span className="endpoint-badge">A</span>
+              <span className="endpoint-text">{origin ? origin.name : <em>Sin origen todavía</em>}</span>
+              {origin && <button type="button" className="text-button" onClick={() => setEndpoint('origin', null)}>Quitar</button>}
+            </div>
+            <div className="endpoint-row">
+              <span className="endpoint-badge">B</span>
+              <span className="endpoint-text">{destination ? destination.name : <em>Sin destino todavía</em>}</span>
+              {destination && <button type="button" className="text-button" onClick={() => setEndpoint('destination', null)}>Quitar</button>}
+            </div>
+          </div>
+        </> : <p className="lede-note">Busca el punto de partida y ve tocando el mapa para marcar el camino, punto a punto.</p>}
+
+        <RouteMap
+          points={mapPoints} markers={markers} corridorWidthMeters={corridorWidthMeters} editable
+          onAddPoint={handleMapClick}
+          resultActions={drawMode === 'auto' ? [
+            { label: 'A', onPick: (point, name) => setEndpoint('origin', { point, name }) },
+            { label: 'B', onPick: (point, name) => setEndpoint('destination', { point, name }) },
+          ] : undefined}
+        />
+
+        {calculating && <p className="lede-note">Calculando la ruta…</p>}
+        {summary && <p className="route-summary">{summary}</p>}
+        <div className="route-map-actions">
+          {drawMode === 'manual'
+            ? <button type="button" className="text-button" onClick={() => setPoints(current => current.slice(0, -1))} disabled={!points.length}>Deshacer último punto</button>
+            : <button type="button" className="text-button" onClick={() => { setOrigin(null); setDestination(null); setPoints([]); setSummary('') }} disabled={!origin && !destination}>Empezar de nuevo</button>}
+          <button type="button" className="text-button" onClick={() => { setPoints([]); setOrigin(null); setDestination(null); setSummary('') }} disabled={!points.length && !origin && !destination}>Borrar todo</button>
+        </div>
+        <label>Ancho del margen de seguridad (metros)
+          <input required type="number" min={10} max={500} value={corridorWidthMeters} onChange={e => setCorridorWidthMeters(Number(e.target.value))} />
+          <small className="field-hint">Se avisa de desvío si se aleja más de esta distancia del camino. {mode === 'CAR' ? 'En coche conviene un margen amplio (200-300 m).' : 'A pie suele bastar con 50-100 m.'}</small>
+        </label>
+      </section>
+
+      <section className="editor-step">
+        <h2><span className="step-number">3</span> Datos</h2>
         <label>Nombre de la ruta<input required value={label} onChange={e => setLabel(e.target.value)} placeholder="Ej. Centro de día → Casa" /></label>
         <label>Persona usuaria<select required value={usuarioId} onChange={e => setUsuarioId(e.target.value)} disabled={Boolean(savedRouteId)}>
           <option value="" disabled>Selecciona…</option>
           {usuarios.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select></label>
-        <fieldset><legend>Cómo se hace el trayecto</legend><div className="option-toggle">
-          <button type="button" className={mode === 'WALK' ? 'selected' : ''} onClick={() => setMode('WALK')}>A pie</button>
-          <button type="button" className={mode === 'CAR' ? 'selected' : ''} onClick={() => setMode('CAR')}>En coche</button>
-        </div></fieldset>
-        <label>Ancho del margen de seguridad (metros)<input required type="number" min={10} max={500} value={corridorWidthMeters} onChange={e => setCorridorWidthMeters(Number(e.target.value))} /></label>
         {savedRouteId && <label className="switch-row"><span><strong>Ruta activa</strong><small>Una ruta pausada no genera avisos</small></span><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} /><i /></label>}
-        {error && <div className="form-error">{error}</div>}
-        <div className="form-actions">
-          <button className="primary" type="submit" disabled={busy}><Check /> {busy ? 'Guardando…' : 'Guardar ruta'}</button>
-          {savedRouteId && <button className="danger" type="button" onClick={removeRoute}><Trash2 /> Eliminar ruta</button>}
+      </section>
+
+      {!savedRouteId && <section className="editor-step">
+        <h2><span className="step-number">4</span> ¿Cuándo?</h2>
+        <div className="option-toggle">
+          <button type="button" className={scheduleKind === 'ONCE' ? 'selected' : ''} onClick={() => setScheduleKind('ONCE')}>Ahora mismo</button>
+          <button type="button" className={scheduleKind === 'WEEKLY' ? 'selected' : ''} onClick={() => setScheduleKind('WEEKLY')}>Todas las semanas</button>
         </div>
-      </form>
-      {savedRouteId && <SchedulesEditor routeId={savedRouteId} schedules={schedules} onChange={setSchedules} />}
+        {scheduleKind === 'ONCE'
+          ? <p className="lede-note">Trayecto de una sola vez: empieza a vigilarse en cuanto guardes y se apaga solo al llegar.</p>
+          : <>
+              <fieldset><legend>Días</legend><div className="days">{ALL_DAYS.map(day => <button type="button" key={day} className={days.includes(day) ? 'selected' : ''} onClick={() => toggleDay(day)}>{DAY_NAMES[day]}</button>)}</div></fieldset>
+              <label>Hora de salida<input required type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
+            </>}
+        <label>Avisar si no ha salido pasados (minutos)<input required type="number" min={5} max={180} value={windowMinutesAfter} onChange={e => setWindowMinutesAfter(Number(e.target.value))} /></label>
+        <label>Duración estimada del trayecto en minutos (opcional)
+          <input type="number" min={1} max={240} value={estimatedArrivalMinutes} onChange={e => setEstimatedArrivalMinutes(e.target.value)} placeholder="Ej. 20" />
+          <small className="field-hint">Si la indicas, también se avisa cuando tarda más de la cuenta en llegar.</small>
+        </label>
+      </section>}
+
+      {error && <div className="form-error">{error}</div>}
+      <div className="form-actions">
+        <button className="primary" type="submit" disabled={busy || calculating}><Check /> {busy ? 'Guardando…' : savedRouteId ? 'Guardar cambios' : 'Crear ruta'}</button>
+        {savedRouteId && <button className="danger" type="button" onClick={removeRoute}><Trash2 /> Eliminar ruta</button>}
+      </div>
+    </form>
+    {savedRouteId && <SchedulesEditor routeId={savedRouteId} schedules={schedules} onChange={setSchedules} />}
     </div>
   </div></div>
 }
