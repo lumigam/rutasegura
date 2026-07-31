@@ -39,7 +39,8 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=es&limit=5&q=${encodeURIComponent(query)}`)
       const found = await response.json() as SearchResult[]
       if (!found.length) { setSearchError('No se ha encontrado ese lugar'); return }
-      setResults(found)
+      if (found.length === 1) pickResult(found[0])
+      else setResults(found)
     } catch { setSearchError('No se pudo buscar el lugar') }
     finally { setSearching(false) }
   }
