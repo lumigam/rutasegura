@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { BrandMark, ChevronRight, Home as HomeIcon, MapPin, ShieldCheck, Trash2 } from './icons'
+import { BellRing, BrandMark, ChevronRight, Home as HomeIcon, MapPin, ShieldCheck, Trash2 } from './icons'
 import { ApiError, acceptLegalConsent, currentUser, deleteOwnAccount, exportAccountData, login, logout, register } from './storage'
 import { ConsentScreen, CookieBanner, LegalFooter, LegalPage, legalKindFromPath } from './Legal'
+import { alertsWereEnabled, enablePushNotifications, restorePushSubscription } from './notifications'
 import { RoutesView, UsuarioRoutes } from './Routes'
 import { isNativeAndroid, stopRouteGuard } from './routeGuard'
 import { LEGAL_CONSENT_VERSION, type UserAccount } from './types'
@@ -15,6 +16,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
 
   useEffect(() => { currentUser().then(setUser).finally(() => setAuthLoading(false)) }, [])
+  useEffect(() => { if (user) void restorePushSubscription() }, [user?.id])
 
   if (legalKind) return <LegalPage kind={legalKind} />
   if (authLoading) return <><div className="auth-loading"><span className="brand-mark"><BrandMark /></span><strong>Ruta Segura</strong></div><CookieBanner /></>
@@ -114,6 +116,28 @@ function HomeView({ user }: { user: UserAccount }) {
   </div>
 }
 
+function NotificationsCard() {
+  const [enabled, setEnabled] = useState(alertsWereEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted')
+  const [message, setMessage] = useState('')
+  const activate = async () => {
+    setMessage('')
+    const result = await enablePushNotifications()
+    if (result.push) { setEnabled(true); return }
+    setEnabled(false)
+    if (result.reason === 'denied') setMessage('Has bloqueado los avisos para esta app en el navegador. Actívalos en los ajustes del sitio para recibirlos.')
+    else if (result.reason === 'unsupported') setMessage('Este navegador no admite avisos push.')
+    else if (result.reason === 'server') setMessage('Los avisos todavía no están disponibles en el servidor. Inténtalo más tarde.')
+  }
+  return <section className="profile-card">
+    <h2>Avisos</h2>
+    <p>Recibe un aviso cuando salga, llegue, se desvíe o se retrase en una ruta programada.</p>
+    {enabled
+      ? <div className="alerts-ready" role="status"><BellRing /><span><strong>Avisos activados</strong><small>Te avisaremos en este dispositivo.</small></span></div>
+      : <button className="secondary-button" onClick={activate}>Activar avisos</button>}
+    {message && <div className="form-error">{message}</div>}
+  </section>
+}
+
 function ProfileView({ user, onDeleted }: { user: UserAccount, onDeleted: () => void }) {
   const [password, setPassword] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const removeAccount = async () => {
@@ -125,6 +149,7 @@ function ProfileView({ user, onDeleted }: { user: UserAccount, onDeleted: () => 
   }
   return <div className="page inner-page profile-page">
     <div className="inner-heading"><div><p className="eyebrow">MI CUENTA</p><h1>{user.name}</h1><p>{user.email}</p></div></div>
+    <NotificationsCard />
     <section className="profile-card"><h2>Descargar mis datos</h2><p>Obtén una copia en formato JSON de los datos de tu cuenta.</p><button className="secondary-button" onClick={() => exportAccountData().catch(() => setError('No se pudo generar la descarga'))}>Descargar mis datos</button></section>
     <section className="profile-card danger-zone"><h2>Eliminar mi cuenta</h2><p>Se eliminarán definitivamente la cuenta y los datos asociados. Escribe tu contraseña para confirmar.</p><input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Contraseña actual" /><button className="danger" disabled={password.length < 8 || busy} onClick={removeAccount}><Trash2 /> {busy ? 'Eliminando…' : 'Eliminar definitivamente'}</button></section>
     {error && <div className="form-error">{error}</div>}
