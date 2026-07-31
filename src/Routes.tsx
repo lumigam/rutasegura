@@ -78,8 +78,8 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
   }, [points, corridorWidthMeters])
 
   return <>
-    <form className="map-search" onSubmit={search}>
-      <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Ej. Calle Mayorga 1, Plasencia" />
+    <form className="map-search" onSubmit={search} autoComplete="off">
+      <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Ej. Calle Mayorga 1, Plasencia" name="route-map-search-query" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
       <button type="submit" disabled={searching}>{searching ? '…' : 'Buscar'}</button>
     </form>
     {searchError && <div className="form-error">{searchError}</div>}
