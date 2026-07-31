@@ -4,6 +4,7 @@ import type { Route } from './types'
 export type RouteGuardStatus = {
   foregroundLocation: boolean
   backgroundLocation: boolean
+  notifications: boolean
   playServicesAvailable: boolean
   activeRouteCount: number
 }
@@ -32,6 +33,7 @@ interface RouteGuardNativePlugin {
   syncRoutes(options: { routes: RouteGuardRouteInput[] }): Promise<RouteGuardStatus>
   stopAll(): Promise<void>
   registerLiveToken(): Promise<void>
+  requestNotifications(): Promise<RouteGuardStatus>
 }
 
 const RouteGuard = registerPlugin<RouteGuardNativePlugin>('RouteGuard')
@@ -44,6 +46,7 @@ export const openLocationSettings = () => RouteGuard.openLocationSettings()
 export const updateRouteGuardSession = (token: string, apiBaseUrl: string) => RouteGuard.updateSession({ token, apiBaseUrl })
 export const stopRouteGuard = () => RouteGuard.stopAll()
 export const registerLiveLocationToken = () => RouteGuard.registerLiveToken().catch(() => undefined)
+export const requestNativeNotifications = () => RouteGuard.requestNotifications()
 
 export function syncRouteGuardRoutes(routes: Route[]) {
   if (!isNativeAndroid()) return Promise.resolve(null)

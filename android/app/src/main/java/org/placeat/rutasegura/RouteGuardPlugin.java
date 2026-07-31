@@ -24,7 +24,8 @@ import java.util.List;
 
 @CapacitorPlugin(name = "RouteGuard", permissions = {
     @Permission(alias = "location", strings = { Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION }),
-    @Permission(alias = "backgroundLocation", strings = { Manifest.permission.ACCESS_BACKGROUND_LOCATION })
+    @Permission(alias = "backgroundLocation", strings = { Manifest.permission.ACCESS_BACKGROUND_LOCATION }),
+    @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
 })
 public class RouteGuardPlugin extends Plugin {
     @PluginMethod
@@ -90,6 +91,17 @@ public class RouteGuardPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void requestNotifications(PluginCall call) {
+        if (hasNotifications()) { call.resolve(statusObject()); return; }
+        requestPermissionForAlias("notifications", call, "notificationsCallback");
+    }
+
+    @PermissionCallback
+    private void notificationsCallback(PluginCall call) {
+        call.resolve(statusObject());
+    }
+
+    @PluginMethod
     public void registerLiveToken(PluginCall call) {
         FirebaseMessaging.getInstance().getToken()
             .addOnSuccessListener(token -> {
@@ -104,6 +116,11 @@ public class RouteGuardPlugin extends Plugin {
         return ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
+    private boolean hasNotifications() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
     private boolean hasBackgroundLocation() {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             ContextCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED;
@@ -114,6 +131,7 @@ public class RouteGuardPlugin extends Plugin {
         return new JSObject()
             .put("foregroundLocation", hasForegroundLocation())
             .put("backgroundLocation", hasBackgroundLocation())
+            .put("notifications", hasNotifications())
             .put("playServicesAvailable", playServices)
             .put("activeRouteCount", RouteGuardStore.all(getContext()).size());
     }

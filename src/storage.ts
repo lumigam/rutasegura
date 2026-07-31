@@ -90,6 +90,11 @@ export const createRoute = (data: RouteInput) => request<Route>('/api/routes', {
 export const updateRoute = (id: string, data: RouteUpdateInput) => request<Route>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 export const deleteRoute = (id: string) => request<{ ok: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }).then(() => undefined)
 
+export type TripEvent = { id: string, type: 'DEPARTED' | 'ARRIVED' | 'DEVIATED' | 'DELAYED' | 'SOS' | 'LOCATE_RESPONSE', createdAt: string, lat: number | null, lng: number | null }
+export type Trip = { id: string, scheduledFor: string, status: 'NOT_STARTED' | 'IN_PROGRESS' | 'ARRIVED' | 'DEVIATED' | 'DELAYED' | 'CANCELLED', startedAt: string | null, endedAt: string | null, events: TripEvent[] }
+export type RouteActivity = { usuario: { id: string, name: string }, trips: Trip[] }
+export const loadRouteActivity = (routeId: string) => request<RouteActivity>(`/api/routes/${routeId}/activity`)
+
 export type DirectionsConfig = { enabled: boolean }
 export const getDirectionsConfig = () => request<DirectionsConfig>('/api/routes/directions/config')
 export type DirectionsResult = { points: LatLng[], distanceMeters: number | null, durationSeconds: number | null }

@@ -5,8 +5,8 @@ import { Check, ChevronRight, Locate, MapPin, Plus, Trash2, X } from './icons'
 import {
   calculateDirections, claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
   generatePairingCode, getApiOrigin, getDirectionsConfig, getLiveConfig, getSessionToken, loadLinkedUsuarios, loadMyRoutes, loadRoutes,
-  pollLiveLocation, requestLiveLocation, unlinkUsuario, updateRoute, updateSchedule,
-  type ScheduleInput,
+  loadRouteActivity, pollLiveLocation, requestLiveLocation, unlinkUsuario, updateRoute, updateSchedule,
+  type RouteActivity, type ScheduleInput, type Trip, type TripEvent,
 } from './storage'
 import {
   getRouteGuardStatus, isNativeAndroid, openLocationSettings, registerLiveLocationToken, requestBackgroundLocation, requestForegroundLocation,
@@ -108,13 +108,13 @@ function RouteMap({ points, markers, corridorWidthMeters, editable, onAddPoint, 
   return <>
     {/* Deliberately not a <form>: this sits inside the route editor's form and nesting forms is invalid HTML
         (pressing Enter here would submit the outer form and create the route half-finished). */}
-    <div className="map-search">
+    {editable && <div className="map-search">
       <input value={query} onChange={e => setQuery(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void search() } }}
         placeholder="Ej. Calle Mayorga 1, Plasencia" name="route-map-search-query"
         autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
       <button type="button" onClick={() => void search()} disabled={searching}>{searching ? '…' : 'Buscar'}</button>
-    </div>
+    </div>}
     {searchError && <div className="form-error">{searchError}</div>}
     {results.length > 0 && <ul className="search-results">
       {results.map((result, index) => <li key={index}>
@@ -243,9 +243,13 @@ export function RoutesView() {
   const [routes, setRoutes] = useState<Route[]>([])
   const [loaded, setLoaded] = useState(false)
   const [editing, setEditing] = useState<Route | 'new' | null>(null)
+  const [viewing, setViewing] = useState<Route | null>(null)
   const [error, setError] = useState('')
 
-  const refresh = () => Promise.all([loadLinkedUsuarios(), loadRoutes()]).then(([u, r]) => { setUsuarios(u); setRoutes(r); setLoaded(true) })
+  const refresh = () => Promise.all([loadLinkedUsuarios(), loadRoutes()]).then(([u, r]) => {
+    setUsuarios(u); setRoutes(r); setLoaded(true)
+    setViewing(current => current ? r.find(route => route.id === current.id) ?? null : null)
+  })
   useEffect(() => { refresh().catch(() => setError('No se pudieron cargar las rutas')) }, [])
 
   return <div className="page inner-page">
@@ -258,15 +262,98 @@ export function RoutesView() {
     {loaded && usuarios.length === 0 && <p className="lede-note">Vincula primero a una persona usuaria para poder crear una ruta.</p>}
     {usuarios.length > 0 && <LinkedUsuariosList usuarios={usuarios} onChange={refresh} />}
     {routes.length > 0 && <div className="route-list">
-      {routes.map(route => <button className="route-row" key={route.id} onClick={() => setEditing(route)}>
+      {routes.map(route => <button className="route-row" key={route.id} onClick={() => setViewing(route)}>
         <span className="route-row-icon"><MapPin /></span>
-        <span className="route-row-text"><strong>{route.label}</strong><small>{usuarios.find(u => u.id === route.usuarioId)?.name ?? 'Persona usuaria'} · {route.schedules.length ? `${route.schedules.length} horario(s)` : 'Sin horario'}</small></span>
+        <span className="route-row-text"><strong>{route.label}</strong><small>{usuarios.find(u => u.id === route.usuarioId)?.name ?? 'Persona usuaria'} · {route.mode === 'CAR' ? 'en coche' : 'a pie'} · {route.schedules.length ? route.schedules.map(scheduleSummary).join(' · ') : 'sin horario'}</small></span>
         <ChevronRight />
       </button>)}
     </div>}
     {loaded && routes.length === 0 && usuarios.length > 0 && <div className="large-empty"><MapPin /><h2>Aún no hay rutas</h2><p>Añade la primera para empezar a recibir avisos.</p><button className="primary" onClick={() => setEditing('new')}><Plus /> Añadir ruta</button></div>}
+    {viewing && !editing && <RouteDetail
+      route={viewing}
+      usuario={usuarios.find(u => u.id === viewing.usuarioId)}
+      onClose={() => setViewing(null)}
+      onEdit={() => setEditing(viewing)}
+    />}
     {editing && <RouteEditor initial={editing === 'new' ? null : editing} usuarios={usuarios} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); refresh() }} />}
   </div>
+}
+
+const TRIP_STATUS: Record<Trip['status'], { label: string, tone: 'ok' | 'warn' | 'idle' | 'live' }> = {
+  NOT_STARTED: { label: 'Aún no ha salido', tone: 'idle' },
+  IN_PROGRESS: { label: 'En camino', tone: 'live' },
+  ARRIVED: { label: 'Ha llegado', tone: 'ok' },
+  DEVIATED: { label: 'Se ha apartado del camino', tone: 'warn' },
+  DELAYED: { label: 'Va con retraso', tone: 'warn' },
+  CANCELLED: { label: 'Cancelado', tone: 'idle' },
+}
+const EVENT_LABEL: Record<TripEvent['type'], string> = {
+  DEPARTED: 'Salió', ARRIVED: 'Llegó', DEVIATED: 'Se apartó del camino',
+  DELAYED: 'Aviso de retraso', SOS: 'Aviso de ayuda', LOCATE_RESPONSE: 'Envió su ubicación',
+}
+const shortTime = (iso: string) => new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
+const scheduleSummary = (schedule: Schedule) => schedule.kind === 'ONCE'
+  ? 'Trayecto puntual, de una sola vez'
+  : `${schedule.time} · ${schedule.days.length === 7 ? 'todos los días' : schedule.days.map(d => DAY_NAMES[d]).join(', ')}`
+
+function RouteDetail({ route, usuario, onClose, onEdit }: { route: Route, usuario: LinkedUsuario | undefined, onClose: () => void, onEdit: () => void }) {
+  const [activity, setActivity] = useState<RouteActivity | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [liveEnabled, setLiveEnabled] = useState(false)
+  const [showLive, setShowLive] = useState(false)
+
+  useEffect(() => { loadRouteActivity(route.id).then(setActivity).catch(() => undefined).finally(() => setLoading(false)) }, [route.id])
+  useEffect(() => { getLiveConfig().then(c => setLiveEnabled(c.enabled)).catch(() => undefined) }, [])
+
+  const trip = activity?.trips[0]
+  const status = trip ? TRIP_STATUS[trip.status] : null
+  const markers: MapMarker[] = route.points.length > 1
+    ? [{ point: route.points[0], label: 'A' }, { point: route.points[route.points.length - 1], label: 'B' }]
+    : []
+
+  return <div className="modal-backdrop" role="presentation"><div className="sheet route-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">RUTA</p><h1 id="detail-title">{route.label}</h1></div><span /></div>
+    <div className="route-editor-body">
+      <p className="detail-meta">{usuario?.name ?? 'Persona usuaria'} · {route.mode === 'CAR' ? 'En coche' : 'A pie'} · margen de {route.corridorWidthMeters} m{route.active ? '' : ' · ruta pausada'}</p>
+
+      {loading
+        ? <p className="lede-note">Cargando el estado…</p>
+        : status
+          ? <div className={`trip-status trip-${status.tone}`}>
+              <strong>{status.label}</strong>
+              <small>{trip?.startedAt ? `Salió a las ${shortTime(trip.startedAt)}` : 'Sin salida registrada todavía'}{trip?.endedAt ? ` · llegó a las ${shortTime(trip.endedAt)}` : ''}</small>
+            </div>
+          : <div className="trip-status trip-idle"><strong>Sin actividad reciente</strong><small>Aquí verás lo que ocurra en el próximo trayecto.</small></div>}
+
+      {liveEnabled && usuario && <button type="button" className="primary" style={{ width: '100%', marginBottom: 18 }} onClick={() => setShowLive(true)}>
+        <Locate /> Ver dónde está ahora
+      </button>}
+
+      <RouteMap points={route.points} markers={markers} corridorWidthMeters={route.corridorWidthMeters} editable={false} />
+
+      <h2 className="detail-heading">Horarios</h2>
+      <div className="schedule-list">
+        {route.schedules.length
+          ? route.schedules.map(schedule => <div className="schedule-row" key={schedule.id}>
+              <div><strong>{schedule.kind === 'ONCE' ? 'Puntual' : schedule.time}</strong><span>{scheduleSummary(schedule)}</span></div>
+              {!schedule.active && <span className="schedule-note">Desactivado</span>}
+            </div>)
+          : <p className="lede-note">Esta ruta no tiene ningún horario.</p>}
+      </div>
+
+      {trip && trip.events.length > 0 && <>
+        <h2 className="detail-heading">Lo que ha pasado</h2>
+        <ul className="event-list">
+          {trip.events.map(event => <li key={event.id}><span>{shortTime(event.createdAt)}</span>{EVENT_LABEL[event.type]}</li>)}
+        </ul>
+      </>}
+
+      <div className="form-actions" style={{ marginTop: 22 }}>
+        <button type="button" className="primary" onClick={onEdit}>Editar ruta</button>
+      </div>
+    </div>
+    {showLive && usuario && <LiveLocationModal usuario={usuario} onClose={() => setShowLive(false)} />}
+  </div></div>
 }
 
 type Endpoint = { point: LatLng, name: string }

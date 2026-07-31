@@ -104,7 +104,14 @@ function randomPairingCode() {
 }
 function decryptRoute<T extends { label: string }>(item: T) { return { ...item, label: decryptValue(item.label) } }
 
-async function sendPushToUser(userId: string, message: { title: string, body: string, tag: string }) {
+type AlertMessage = { title: string, body: string, tag: string }
+
+/** Browsers get Web Push (VAPID); the Android app gets FCM, because the Android WebView has no Push API at all. */
+async function sendPushToUser(userId: string, message: AlertMessage) {
+  await Promise.all([sendWebPush(userId, message), sendNativePush(userId, message)])
+}
+
+async function sendWebPush(userId: string, message: AlertMessage) {
   if (!pushEnabled) return
   const subscriptions = await prisma.pushSubscription.findMany({ where: { userId } })
   const payload = JSON.stringify({ title: message.title, body: message.body, tag: message.tag, url: '/' })
@@ -117,6 +124,25 @@ async function sendPushToUser(userId: string, message: { title: string, body: st
       else console.error('No se pudo enviar un aviso push', cause)
     }
   }
+}
+
+async function sendNativePush(userId: string, message: AlertMessage) {
+  if (!liveEnabled) return
+  const tokens = await prisma.fcmToken.findMany({ where: { userId } })
+  await Promise.all(tokens.map(async token => {
+    try {
+      await getMessaging().send({
+        token: token.token,
+        notification: { title: message.title, body: message.body },
+        data: { type: 'ALERT', tag: message.tag },
+        android: { priority: 'high', notification: { channelId: 'route_alerts_v1', tag: message.tag } },
+      })
+    } catch (cause) {
+      const code = typeof cause === 'object' && cause && 'code' in cause ? String(cause.code) : ''
+      if (code === 'messaging/registration-token-not-registered' || code === 'messaging/invalid-registration-token') await prisma.fcmToken.delete({ where: { id: token.id } }).catch(() => undefined)
+      else console.error('No se pudo enviar un aviso al móvil', cause)
+    }
+  }))
 }
 
 app.get('/api/health', async (_req, res) => { await prisma.$queryRaw`SELECT 1`; res.json({ ok: true, pushEnabled, liveEnabled }) })
@@ -180,7 +206,7 @@ const pushSubscriptionSchema = z.object({
     try { new Intl.DateTimeFormat('es-ES', { timeZone: value }).format(); return true } catch { return false }
   }),
 })
-app.get('/api/notifications/config', (_req, res) => res.json({ enabled: pushEnabled, publicKey: pushEnabled ? vapidPublicKey : null }))
+app.get('/api/notifications/config', (_req, res) => res.json({ enabled: pushEnabled, publicKey: pushEnabled ? vapidPublicKey : null, nativeEnabled: liveEnabled }))
 app.post('/api/notifications/subscribe', authenticate, consentRequired, async (req: AuthRequest, res) => {
   if (!pushEnabled) return res.status(503).json({ error: 'Las notificaciones push todavía no están configuradas en el servidor' })
   const parsed = pushSubscriptionSchema.safeParse(req.body)
@@ -287,6 +313,17 @@ app.delete('/api/routes/:id', authenticate, consentRequired, tutorOnly, async (r
   await prisma.route.deleteMany({ where: { id: String(req.params.id), tutorId: req.user!.id } })
   res.json({ ok: true })
 })
+/** What has actually happened on this route recently, so the tutor can look instead of guessing. */
+app.get('/api/routes/:id/activity', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  const route = await prisma.route.findFirst({ where: { id: String(req.params.id), tutorId: req.user!.id }, include: { usuario: { select: { id: true, name: true } } } })
+  if (!route) return res.status(404).json({ error: 'Ruta no encontrada' })
+  const trips = await prisma.trip.findMany({
+    where: { routeId: route.id, scheduledFor: { gte: new Date(Date.now() - 36 * 60 * 60_000) } },
+    include: { events: { orderBy: { createdAt: 'asc' }, select: { id: true, type: true, createdAt: true, lat: true, lng: true } } },
+    orderBy: { scheduledFor: 'desc' }, take: 5,
+  })
+  res.json({ usuario: route.usuario, trips })
+})
 
 const ORS_PROFILES: Record<TravelMode, string> = { WALK: 'foot-walking', CAR: 'driving-car' }
 const orsApiKey = process.env.ORS_API_KEY?.trim() || ''
@@ -392,7 +429,7 @@ app.post('/api/trips/events', authenticate, consentRequired, usuarioOnly, async 
 })
 
 app.get('/api/live/config', (_req, res) => res.json({ enabled: liveEnabled }))
-app.post('/api/live/token', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
+app.post('/api/live/token', authenticate, consentRequired, async (req: AuthRequest, res) => {
   const parsed = z.object({ token: z.string().min(20).max(4096) }).safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Token no válido' })
   await prisma.fcmToken.upsert({ where: { token: parsed.data.token }, update: { userId: req.user!.id }, create: { token: parsed.data.token, userId: req.user!.id } })
@@ -463,7 +500,7 @@ async function ensureAdmin() {
 
 let scheduleCheckRunning = false
 async function checkScheduleAlerts() {
-  if (!pushEnabled || scheduleCheckRunning) return
+  if ((!pushEnabled && !liveEnabled) || scheduleCheckRunning) return
   scheduleCheckRunning = true
   try {
     const now = new Date()

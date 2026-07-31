@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { BellRing, BrandMark, ChevronRight, Home as HomeIcon, MapPin, ShieldCheck, Trash2 } from './icons'
-import { ApiError, acceptLegalConsent, currentUser, deleteOwnAccount, exportAccountData, login, logout, register } from './storage'
+import { ApiError, acceptLegalConsent, currentUser, deleteOwnAccount, exportAccountData, getApiOrigin, getSessionToken, login, logout, register } from './storage'
 import { ConsentScreen, CookieBanner, LegalFooter, LegalPage, legalKindFromPath } from './Legal'
 import { alertsWereEnabled, enablePushNotifications, restorePushSubscription } from './notifications'
 import { RoutesView, UsuarioRoutes } from './Routes'
-import { isNativeAndroid, stopRouteGuard } from './routeGuard'
+import { getRouteGuardStatus, isNativeAndroid, registerLiveLocationToken, requestNativeNotifications, stopRouteGuard, updateRouteGuardSession } from './routeGuard'
 import { LEGAL_CONSENT_VERSION, type UserAccount } from './types'
 
 type Tab = 'home' | 'routes' | 'profile'
@@ -16,7 +16,14 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true)
 
   useEffect(() => { currentUser().then(setUser).finally(() => setAuthLoading(false)) }, [])
-  useEffect(() => { if (user) void restorePushSubscription() }, [user?.id])
+  useEffect(() => {
+    if (!user) return
+    if (!isNativeAndroid()) { void restorePushSubscription(); return }
+    // Both roles need a device token: the tutor to receive alerts, the tracked person to answer
+    // "ver ahora". The native session has to be stored first, since the token is posted with it.
+    const token = getSessionToken()
+    if (token) void updateRouteGuardSession(token, getApiOrigin()).then(() => registerLiveLocationToken()).catch(() => undefined)
+  }, [user?.id])
 
   if (legalKind) return <LegalPage kind={legalKind} />
   if (authLoading) return <><div className="auth-loading"><span className="brand-mark"><BrandMark /></span><strong>Ruta Segura</strong></div><CookieBanner /></>
@@ -117,9 +124,28 @@ function HomeView({ user }: { user: UserAccount }) {
 }
 
 function NotificationsCard() {
-  const [enabled, setEnabled] = useState(alertsWereEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted')
+  const native = isNativeAndroid()
+  const [enabled, setEnabled] = useState(!native && alertsWereEnabled() && typeof Notification !== 'undefined' && Notification.permission === 'granted')
   const [message, setMessage] = useState('')
-  const activate = async () => {
+
+  // The Android WebView has no Push API at all, so inside the app alerts travel over
+  // Firebase Cloud Messaging instead of Web Push.
+  useEffect(() => {
+    if (!native) return
+    getRouteGuardStatus().then(status => setEnabled(status.notifications)).catch(() => undefined)
+  }, [native])
+
+  const activateNative = async () => {
+    setMessage('')
+    try {
+      const status = await requestNativeNotifications()
+      setEnabled(status.notifications)
+      await registerLiveLocationToken()
+      if (!status.notifications) setMessage('Has denegado el permiso. Actívalo en los ajustes del teléfono, en Notificaciones.')
+    } catch { setMessage('No se pudo activar los avisos en este dispositivo.') }
+  }
+
+  const activateWeb = async () => {
     setMessage('')
     const result = await enablePushNotifications()
     if (result.push) { setEnabled(true); return }
@@ -128,12 +154,13 @@ function NotificationsCard() {
     else if (result.reason === 'unsupported') setMessage('Este navegador no admite avisos push.')
     else if (result.reason === 'server') setMessage('Los avisos todavía no están disponibles en el servidor. Inténtalo más tarde.')
   }
+
   return <section className="profile-card">
     <h2>Avisos</h2>
     <p>Recibe un aviso cuando salga, llegue, se desvíe o se retrase en una ruta programada.</p>
     {enabled
       ? <div className="alerts-ready" role="status"><BellRing /><span><strong>Avisos activados</strong><small>Te avisaremos en este dispositivo.</small></span></div>
-      : <button className="secondary-button" onClick={activate}>Activar avisos</button>}
+      : <button className="secondary-button" onClick={native ? activateNative : activateWeb}>Activar avisos</button>}
     {message && <div className="form-error">{message}</div>}
   </section>
 }

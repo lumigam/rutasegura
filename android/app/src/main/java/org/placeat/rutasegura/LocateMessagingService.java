@@ -24,6 +24,13 @@ public class LocateMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage message) {
         Map<String, String> data = message.getData();
+        // Route alerts arrive with a notification payload, which the system shows by itself while the
+        // app is backgrounded; in the foreground it lands here instead and we have to post it ourselves.
+        RemoteMessage.Notification notification = message.getNotification();
+        if (notification != null) {
+            AlertNotifications.show(getApplicationContext(), notification.getTitle(), notification.getBody(), data.get("tag"));
+            return;
+        }
         if (!"LOCATE_REQUEST".equals(data.get("type"))) return;
         String requestId = data.get("requestId");
         if (requestId == null) return;

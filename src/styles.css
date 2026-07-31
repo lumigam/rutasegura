@@ -246,6 +246,19 @@ legend { margin-bottom: 11px; padding: 0; font-size: 12.5px; font-weight: 600; c
 .route-pin span { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--brand-deep); color: white; font-size: 11px; font-weight: 700; border: 2.5px solid white; box-shadow: 0 2px 8px #00000066; }
 .route-summary { font-size: 14px; font-weight: 600; color: var(--brand-deep); background: var(--brand-light); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; }
 
+.detail-meta { color: var(--sub); font-size: 13px; margin: 0 0 16px; }
+.detail-heading { font-size: 18px; margin: 24px 0 12px; }
+.trip-status { display: flex; flex-direction: column; gap: 3px; border-radius: 14px; padding: 15px 17px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--bg); }
+.trip-status strong { font: 500 17px var(--font-display); }
+.trip-status small { color: var(--sub); font-size: 12.5px; }
+.trip-status.trip-live { background: var(--brand-light); border-color: var(--brand); color: var(--brand-deep); }
+.trip-status.trip-ok { background: var(--brand-light); border-color: var(--brand-mid); }
+.trip-status.trip-warn { background: var(--danger-bg); border-color: var(--danger-line); color: var(--danger-ink); }
+.trip-status.trip-warn small { color: var(--danger-ink); opacity: .85; }
+.event-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.event-list li { display: flex; gap: 12px; align-items: baseline; font-size: 14px; border-left: 2px solid var(--line); padding: 2px 0 2px 14px; }
+.event-list span { color: var(--brand); font-weight: 700; font-size: 12px; min-width: 42px; }
+
 .editor-step { border-top: 1px solid var(--line); padding-top: 20px; margin-bottom: 24px; }
 .editor-step:first-child { border-top: 0; padding-top: 0; }
 .editor-step > h2 { display: flex; align-items: center; gap: 10px; font-size: 19px; margin: 0 0 14px; }
