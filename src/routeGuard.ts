@@ -18,6 +18,7 @@ type RouteGuardScheduleInput = {
 type RouteGuardRouteInput = {
   id: string
   points: { lat: number, lng: number }[]
+  mode: string
   corridorWidthMeters: number
   schedules: RouteGuardScheduleInput[]
 }
@@ -49,6 +50,7 @@ export function syncRouteGuardRoutes(routes: Route[]) {
   const input: RouteGuardRouteInput[] = routes.filter(route => route.active).map(route => ({
     id: route.id,
     points: route.points,
+    mode: route.mode,
     corridorWidthMeters: route.corridorWidthMeters,
     schedules: route.schedules.filter(schedule => schedule.active).map(schedule => ({
       id: schedule.id, days: schedule.days, time: schedule.time,

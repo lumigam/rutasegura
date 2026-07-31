@@ -57,8 +57,12 @@ public class RouteGuardService extends Service {
 
     private void startTracking() {
         client = LocationServices.getFusedLocationProviderClient(this);
-        LocationRequest request = new LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 30_000L)
-            .setMinUpdateIntervalMillis(20_000L)
+        RouteGuardRoute route = RouteGuardStore.find(this, routeId);
+        boolean isCar = route != null && "CAR".equals(route.mode);
+        int priority = isCar ? Priority.PRIORITY_HIGH_ACCURACY : Priority.PRIORITY_BALANCED_POWER_ACCURACY;
+        long intervalMs = isCar ? 15_000L : 30_000L;
+        LocationRequest request = new LocationRequest.Builder(priority, intervalMs)
+            .setMinUpdateIntervalMillis(isCar ? 10_000L : 20_000L)
             .build();
         callback = new LocationCallback() {
             @Override

@@ -2,7 +2,7 @@ import 'express-async-errors'
 import express from 'express'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
-import { PrismaClient, Role, TripStatus } from '@prisma/client'
+import { PrismaClient, Role, ScheduleKind, TravelMode, TripStatus } from '@prisma/client'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
@@ -198,22 +198,30 @@ const routeSchema = z.object({
   usuarioId: z.string().uuid(),
   label: z.string().trim().min(1).max(140),
   points: z.array(pointSchema).min(2).max(500),
+  mode: z.nativeEnum(TravelMode).default('WALK'),
   corridorWidthMeters: z.number().int().min(10).max(500).default(75),
 })
 const routeUpdateSchema = z.object({
   label: z.string().trim().min(1).max(140),
   points: z.array(pointSchema).min(2).max(500),
+  mode: z.nativeEnum(TravelMode),
   corridorWidthMeters: z.number().int().min(10).max(500),
   active: z.boolean(),
 })
 const scheduleSchema = z.object({
-  days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  kind: z.nativeEnum(ScheduleKind).default('WEEKLY'),
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
   windowMinutesBefore: z.number().int().min(0).max(180).default(15),
   windowMinutesAfter: z.number().int().min(0).max(180).default(45),
   estimatedArrivalMinutes: z.number().int().min(1).max(240).nullable().default(null),
   arrivalToleranceMinutes: z.number().int().min(5).max(120).default(20),
   active: z.boolean().default(true),
+}).refine(data => data.kind !== 'WEEKLY' || (data.days?.length && data.time), { message: 'Selecciona los días y la hora' })
+const directionsSchema = z.object({
+  mode: z.nativeEnum(TravelMode),
+  origin: pointSchema,
+  destination: pointSchema,
 })
 
 app.post('/api/pairing/code', authenticate, consentRequired, usuarioOnly, async (req: AuthRequest, res) => {
@@ -260,7 +268,7 @@ app.post('/api/routes', authenticate, consentRequired, tutorOnly, async (req: Au
   if (!link) return res.status(403).json({ error: 'Esa persona usuaria no está vinculada a tu cuenta' })
   const route = await prisma.route.create({ data: {
     tutorId: req.user!.id, usuarioId: parsed.data.usuarioId, label: encryptValue(parsed.data.label),
-    points: parsed.data.points, corridorWidthMeters: parsed.data.corridorWidthMeters,
+    points: parsed.data.points, mode: parsed.data.mode, corridorWidthMeters: parsed.data.corridorWidthMeters,
   }, include: { schedules: true } })
   res.status(201).json(decryptRoute(route))
 })
@@ -270,7 +278,7 @@ app.patch('/api/routes/:id', authenticate, consentRequired, tutorOnly, async (re
   const existing = await prisma.route.findFirst({ where: { id: String(req.params.id), tutorId: req.user!.id } })
   if (!existing) return res.status(404).json({ error: 'Ruta no encontrada' })
   const route = await prisma.route.update({ where: { id: existing.id }, data: {
-    label: encryptValue(parsed.data.label), points: parsed.data.points,
+    label: encryptValue(parsed.data.label), points: parsed.data.points, mode: parsed.data.mode,
     corridorWidthMeters: parsed.data.corridorWidthMeters, active: parsed.data.active,
   }, include: { schedules: true } })
   res.json(decryptRoute(route))
@@ -280,20 +288,58 @@ app.delete('/api/routes/:id', authenticate, consentRequired, tutorOnly, async (r
   res.json({ ok: true })
 })
 
+const ORS_PROFILES: Record<TravelMode, string> = { WALK: 'foot-walking', CAR: 'driving-car' }
+const orsApiKey = process.env.ORS_API_KEY?.trim() || ''
+app.get('/api/routes/directions/config', (_req, res) => res.json({ enabled: Boolean(orsApiKey) }))
+app.post('/api/routes/directions', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
+  if (!orsApiKey) return res.status(503).json({ error: 'El cálculo automático de rutas todavía no está configurado en el servidor' })
+  const parsed = directionsSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Puntos de origen o destino no válidos' })
+  const profile = ORS_PROFILES[parsed.data.mode]
+  let orsResponse: Response
+  try {
+    orsResponse = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+      method: 'POST',
+      headers: { Authorization: orsApiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ coordinates: [
+        [parsed.data.origin.lng, parsed.data.origin.lat],
+        [parsed.data.destination.lng, parsed.data.destination.lat],
+      ] }),
+    })
+  } catch { return res.status(502).json({ error: 'No se pudo contactar con el servicio de rutas' }) }
+  if (!orsResponse.ok) return res.status(502).json({ error: 'No se ha podido calcular una ruta entre esos dos puntos' })
+  const geojson = await orsResponse.json() as { features?: { geometry?: { coordinates?: [number, number][] }, properties?: { summary?: { distance?: number, duration?: number } } }[] }
+  const coordinates = geojson.features?.[0]?.geometry?.coordinates
+  if (!coordinates?.length) return res.status(502).json({ error: 'No se ha podido calcular una ruta entre esos dos puntos' })
+  const summary = geojson.features?.[0]?.properties?.summary
+  res.json({ points: coordinates.map(([lng, lat]) => ({ lat, lng })), distanceMeters: summary?.distance ?? null, durationSeconds: summary?.duration ?? null })
+})
+
+/** For a ONCE schedule, "days"/"time" are computed from the current instant (in the usuario's timezone) instead of chosen by the tutor. */
+function onceScheduleFields(timezone: string) {
+  const now = localScheduleParts(new Date(), timezone)
+  return { days: [now.day], time: now.time, windowMinutesBefore: 0 }
+}
 app.post('/api/routes/:routeId/schedules', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
   const parsed = scheduleSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Datos de horario no válidos', details: parsed.error.flatten() })
-  const route = await prisma.route.findFirst({ where: { id: String(req.params.routeId), tutorId: req.user!.id } })
+  const route = await prisma.route.findFirst({ where: { id: String(req.params.routeId), tutorId: req.user!.id }, include: { usuario: true } })
   if (!route) return res.status(404).json({ error: 'Ruta no encontrada' })
-  const schedule = await prisma.schedule.create({ data: { routeId: route.id, ...parsed.data } })
+  const data = parsed.data.kind === 'ONCE'
+    ? { ...parsed.data, ...onceScheduleFields(route.usuario.timezone) }
+    : { ...parsed.data, days: parsed.data.days!, time: parsed.data.time! }
+  const schedule = await prisma.schedule.create({ data: { routeId: route.id, ...data } })
   res.status(201).json(schedule)
 })
 app.patch('/api/schedules/:id', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
   const parsed = scheduleSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: 'Datos de horario no válidos', details: parsed.error.flatten() })
-  const existing = await prisma.schedule.findFirst({ where: { id: String(req.params.id), route: { tutorId: req.user!.id } } })
+  const existing = await prisma.schedule.findFirst({ where: { id: String(req.params.id), route: { tutorId: req.user!.id } }, include: { route: { include: { usuario: true } } } })
   if (!existing) return res.status(404).json({ error: 'Horario no encontrado' })
-  const schedule = await prisma.schedule.update({ where: { id: existing.id }, data: parsed.data })
+  const data = parsed.data.kind === 'ONCE'
+    ? { ...parsed.data, ...onceScheduleFields(existing.route.usuario.timezone) }
+    : { ...parsed.data, days: parsed.data.days!, time: parsed.data.time! }
+  const schedule = await prisma.schedule.update({ where: { id: existing.id }, data })
   res.json(schedule)
 })
 app.delete('/api/schedules/:id', authenticate, consentRequired, tutorOnly, async (req: AuthRequest, res) => {
@@ -333,6 +379,7 @@ app.post('/api/trips/events', authenticate, consentRequired, usuarioOnly, async 
   else if (parsed.data.type === 'ARRIVED') { data.status = TripStatus.ARRIVED; data.endedAt = new Date() }
   else if (parsed.data.type === 'DEVIATED' && trip.status !== TripStatus.ARRIVED) { data.status = TripStatus.DEVIATED }
   if (Object.keys(data).length) await prisma.trip.update({ where: { id: trip.id }, data })
+  if (parsed.data.type === 'ARRIVED' && schedule.kind === 'ONCE') await prisma.schedule.update({ where: { id: schedule.id }, data: { active: false } })
   await prisma.tripEvent.create({ data: { tripId: trip.id, type: parsed.data.type, lat: parsed.data.lat, lng: parsed.data.lng } })
   const message = EVENT_MESSAGES[parsed.data.type]
   await sendPushToUser(schedule.route.tutorId, { ...message, tag: `trip-${trip.id}-${parsed.data.type}` })
@@ -436,6 +483,7 @@ async function checkScheduleAlerts() {
         await prisma.$transaction([
           prisma.trip.update({ where: { id: trip.id }, data: { status: TripStatus.DELAYED } }),
           prisma.tripEvent.create({ data: { tripId: trip.id, type: 'DELAYED' } }),
+          ...(schedule.kind === 'ONCE' ? [prisma.schedule.update({ where: { id: schedule.id }, data: { active: false } })] : []),
         ])
         await sendPushToUser(schedule.route.tutorId, { title: '⏰ No ha salido', body: 'No ha salido todavía a la hora prevista.', tag: `trip-${trip.id}-no-departure` })
         continue
@@ -448,6 +496,7 @@ async function checkScheduleAlerts() {
           await prisma.$transaction([
             prisma.trip.update({ where: { id: trip.id }, data: { status: TripStatus.DELAYED } }),
             prisma.tripEvent.create({ data: { tripId: trip.id, type: 'DELAYED' } }),
+            ...(schedule.kind === 'ONCE' ? [prisma.schedule.update({ where: { id: schedule.id }, data: { active: false } })] : []),
           ])
           const lateMinutes = trip.startedAt ? Math.round((trip.startedAt.getTime() - scheduledFor.getTime()) / 60_000) : 0
           const expected = new Date(deadline.getTime()).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: timezone })

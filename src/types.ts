@@ -13,6 +13,8 @@ export interface UserAccount {
 }
 
 export type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6
+export type TravelMode = 'WALK' | 'CAR'
+export type ScheduleKind = 'WEEKLY' | 'ONCE'
 export interface LatLng { lat: number, lng: number }
 
 export interface LinkedUsuario { id: string, name: string, email: string }
@@ -20,6 +22,7 @@ export interface LinkedUsuario { id: string, name: string, email: string }
 export interface Schedule {
   id: string
   routeId: string
+  kind: ScheduleKind
   days: Weekday[]
   time: string
   windowMinutesBefore: number
@@ -35,6 +38,7 @@ export interface Route {
   usuarioId: string
   label: string
   points: LatLng[]
+  mode: TravelMode
   corridorWidthMeters: number
   active: boolean
   createdAt: string

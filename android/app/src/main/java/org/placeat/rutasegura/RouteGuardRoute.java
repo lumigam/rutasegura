@@ -14,11 +14,13 @@ final class RouteGuardRoute {
     double destLng;
     final List<double[]> corridorPoints = new ArrayList<>();
     int corridorWidthMeters;
+    String mode = "WALK";
     final List<RouteGuardSchedule> schedules = new ArrayList<>();
 
     static RouteGuardRoute fromJson(JSONObject json) throws JSONException {
         RouteGuardRoute route = new RouteGuardRoute();
         route.id = json.getString("id");
+        route.mode = json.optString("mode", "WALK");
         JSONArray points = json.getJSONArray("points");
         for (int index = 0; index < points.length(); index++) {
             JSONObject point = points.getJSONObject(index);
@@ -41,6 +43,7 @@ final class RouteGuardRoute {
     JSONObject toJson() throws JSONException {
         JSONObject json = new JSONObject();
         json.put("id", id);
+        json.put("mode", mode);
         JSONArray points = new JSONArray();
         for (double[] point : corridorPoints) points.put(new JSONObject().put("lat", point[0]).put("lng", point[1]));
         json.put("points", points);

@@ -3,8 +3,8 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { Check, ChevronRight, Locate, MapPin, Plus, Trash2, X } from './icons'
 import {
-  claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
-  generatePairingCode, getApiOrigin, getLiveConfig, getSessionToken, loadLinkedUsuarios, loadMyRoutes, loadRoutes,
+  calculateDirections, claimPairingCode, createRoute, createSchedule, deleteRoute, deleteSchedule,
+  generatePairingCode, getApiOrigin, getDirectionsConfig, getLiveConfig, getSessionToken, loadLinkedUsuarios, loadMyRoutes, loadRoutes,
   pollLiveLocation, requestLiveLocation, unlinkUsuario, updateRoute, updateSchedule,
   type ScheduleInput,
 } from './storage'
@@ -12,7 +12,7 @@ import {
   getRouteGuardStatus, isNativeAndroid, openLocationSettings, registerLiveLocationToken, requestBackgroundLocation, requestForegroundLocation,
   syncRouteGuardRoutes, updateRouteGuardSession, type RouteGuardStatus,
 } from './routeGuard'
-import type { LatLng, LinkedUsuario, Route, Schedule, UserAccount, Weekday } from './types'
+import type { LatLng, LinkedUsuario, Route, Schedule, TravelMode, UserAccount, Weekday } from './types'
 
 const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 const ALL_DAYS: Weekday[] = [0, 1, 2, 3, 4, 5, 6]
@@ -218,6 +218,7 @@ export function RoutesView() {
 function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route | null, usuarios: LinkedUsuario[], onClose: () => void, onSaved: () => void }) {
   const [usuarioId, setUsuarioId] = useState(initial?.usuarioId ?? usuarios[0]?.id ?? '')
   const [label, setLabel] = useState(initial?.label ?? '')
+  const [mode, setModeState] = useState<TravelMode>(initial?.mode ?? 'WALK')
   const [points, setPoints] = useState<LatLng[]>(initial?.points ?? [])
   const [corridorWidthMeters, setCorridorWidthMeters] = useState(initial?.corridorWidthMeters ?? 75)
   const [active, setActive] = useState(initial?.active ?? true)
@@ -226,19 +227,44 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const addPoint = (point: LatLng) => setPoints(current => [...current, point])
+  const [directionsEnabled, setDirectionsEnabled] = useState(false)
+  const [drawMode, setDrawMode] = useState<'manual' | 'auto'>('manual')
+  const [calculating, setCalculating] = useState(false)
+  useEffect(() => { getDirectionsConfig().then(c => setDirectionsEnabled(c.enabled)).catch(() => undefined) }, [])
+
+  const setMode = (next: TravelMode) => {
+    setModeState(next)
+    if (!savedRouteId) setCorridorWidthMeters(next === 'CAR' ? 250 : 75)
+  }
+
+  const calculateAuto = async (origin: LatLng, destination: LatLng) => {
+    setCalculating(true); setError('')
+    try { setPoints((await calculateDirections(mode, origin, destination)).points) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo calcular la ruta entre esos dos puntos'); setPoints([origin, destination]) }
+    finally { setCalculating(false) }
+  }
+  const addPoint = (point: LatLng) => {
+    if (drawMode === 'manual') { setPoints(current => [...current, point]); return }
+    setPoints(current => {
+      if (current.length >= 2) return [point]
+      const next = [...current, point]
+      if (next.length === 2) void calculateAuto(next[0], next[1])
+      return next
+    })
+  }
   const undoPoint = () => setPoints(current => current.slice(0, -1))
   const clearPoints = () => setPoints([])
+  const switchDrawMode = (next: 'manual' | 'auto') => { setDrawMode(next); setPoints([]); setError('') }
 
   const saveRoute = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!usuarioId) { setError('Selecciona a la persona usuaria'); return }
-    if (points.length < 2) { setError('Dibuja al menos dos puntos en el mapa'); return }
+    if (points.length < 2) { setError('Marca al menos dos puntos en el mapa'); return }
     setBusy(true); setError('')
     try {
       const saved = savedRouteId
-        ? await updateRoute(savedRouteId, { label, points, corridorWidthMeters, active })
-        : await createRoute({ usuarioId, label, points, corridorWidthMeters })
+        ? await updateRoute(savedRouteId, { label, points, mode, corridorWidthMeters, active })
+        : await createRoute({ usuarioId, label, points, mode, corridorWidthMeters })
       setSavedRouteId(saved.id)
       setSchedules(saved.schedules)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo guardar la ruta') }
@@ -254,11 +280,18 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
   return <div className="modal-backdrop" role="presentation"><div className="sheet route-sheet" role="dialog" aria-modal="true" aria-labelledby="route-title">
     <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">RUTA</p><h1 id="route-title">{initial ? 'Editar ruta' : 'Nueva ruta'}</h1></div><span /></div>
     <div className="route-editor-body">
-      <p className="lede-note map-hint">Busca el punto de partida y luego toca el mapa para ir marcando el camino, punto a punto.</p>
+      {directionsEnabled && <div className="option-toggle" role="group" aria-label="Cómo marcar el camino">
+        <button type="button" className={drawMode === 'manual' ? 'selected' : ''} onClick={() => switchDrawMode('manual')}>Dibujar a mano</button>
+        <button type="button" className={drawMode === 'auto' ? 'selected' : ''} onClick={() => switchDrawMode('auto')}>Calcular automáticamente</button>
+      </div>}
+      <p className="lede-note map-hint">{drawMode === 'manual'
+        ? 'Busca el punto de partida y luego toca el mapa para ir marcando el camino, punto a punto.'
+        : `Toca el mapa para marcar primero el origen y después el destino — la app calculará el camino ${mode === 'CAR' ? 'en coche' : 'a pie'} entre los dos.`}</p>
+      {calculating && <p className="lede-note">Calculando ruta…</p>}
       <RouteMap points={points} corridorWidthMeters={corridorWidthMeters} editable onAddPoint={addPoint} />
       <div className="route-map-actions">
-        <button type="button" className="text-button" onClick={undoPoint} disabled={!points.length}>Deshacer último punto</button>
-        <button type="button" className="text-button" onClick={clearPoints} disabled={!points.length}>Borrar ruta dibujada</button>
+        <button type="button" className="text-button" onClick={undoPoint} disabled={!points.length}>{drawMode === 'manual' ? 'Deshacer último punto' : 'Empezar de nuevo'}</button>
+        <button type="button" className="text-button" onClick={clearPoints} disabled={!points.length}>Borrar ruta</button>
       </div>
       <form onSubmit={saveRoute}>
         <label>Nombre de la ruta<input required value={label} onChange={e => setLabel(e.target.value)} placeholder="Ej. Centro de día → Casa" /></label>
@@ -266,6 +299,10 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
           <option value="" disabled>Selecciona…</option>
           {usuarios.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select></label>
+        <fieldset><legend>Cómo se hace el trayecto</legend><div className="option-toggle">
+          <button type="button" className={mode === 'WALK' ? 'selected' : ''} onClick={() => setMode('WALK')}>A pie</button>
+          <button type="button" className={mode === 'CAR' ? 'selected' : ''} onClick={() => setMode('CAR')}>En coche</button>
+        </div></fieldset>
         <label>Ancho del margen de seguridad (metros)<input required type="number" min={10} max={500} value={corridorWidthMeters} onChange={e => setCorridorWidthMeters(Number(e.target.value))} /></label>
         {savedRouteId && <label className="switch-row"><span><strong>Ruta activa</strong><small>Una ruta pausada no genera avisos</small></span><input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} /><i /></label>}
         {error && <div className="form-error">{error}</div>}
@@ -297,7 +334,9 @@ function SchedulesEditor({ routeId, schedules, onChange }: { routeId: string, sc
     {error && <div className="form-error">{error}</div>}
     <div className="schedule-list">
       {schedules.map(schedule => <div className="schedule-row" key={schedule.id}>
-        <div><strong>{schedule.time}</strong><span>{schedule.days.length === 7 ? 'Todos los días' : schedule.days.map(d => DAY_NAMES[d]).join(', ')}</span></div>
+        {schedule.kind === 'ONCE'
+          ? <div><strong>Ruta rápida</strong><span>Trayecto de una sola vez, iniciado el {schedule.time}</span></div>
+          : <div><strong>{schedule.time}</strong><span>{schedule.days.length === 7 ? 'Todos los días' : schedule.days.map(d => DAY_NAMES[d]).join(', ')}</span></div>}
         {schedule.estimatedArrivalMinutes != null && <span className="schedule-note">Avisa si no llega en {schedule.estimatedArrivalMinutes + schedule.arrivalToleranceMinutes} min</span>}
         <div className="schedule-actions">
           <button type="button" onClick={() => setEditing(schedule)} aria-label="Editar horario"><ChevronRight /></button>
@@ -314,8 +353,10 @@ function SchedulesEditor({ routeId, schedules, onChange }: { routeId: string, sc
 }
 
 function ScheduleForm({ routeId, initial, onClose, onSaved }: { routeId: string, initial: Schedule | null, onClose: () => void, onSaved: (s: Schedule) => void }) {
+  const [kind, setKind] = useState<Schedule['kind']>(initial?.kind ?? 'WEEKLY')
   const [days, setDays] = useState<Weekday[]>(initial?.days ?? [1, 2, 3, 4, 5])
   const [time, setTime] = useState(initial?.time ?? '18:00')
+  const [windowMinutesAfter, setWindowMinutesAfter] = useState(initial?.windowMinutesAfter ?? (kind === 'ONCE' ? 20 : 45))
   const [estimatedArrivalMinutes, setEstimatedArrivalMinutes] = useState<string>(initial?.estimatedArrivalMinutes != null ? String(initial.estimatedArrivalMinutes) : '')
   const [arrivalToleranceMinutes, setArrivalToleranceMinutes] = useState(initial?.arrivalToleranceMinutes ?? 20)
   const [error, setError] = useState('')
@@ -324,13 +365,12 @@ function ScheduleForm({ routeId, initial, onClose, onSaved }: { routeId: string,
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!days.length) { setError('Selecciona al menos un día'); return }
+    if (kind === 'WEEKLY' && !days.length) { setError('Selecciona al menos un día'); return }
     setBusy(true); setError('')
-    const data: ScheduleInput = {
-      days, time, windowMinutesBefore: 15, windowMinutesAfter: 45,
-      estimatedArrivalMinutes: estimatedArrivalMinutes ? Number(estimatedArrivalMinutes) : null,
-      arrivalToleranceMinutes, active: true,
-    }
+    const data: ScheduleInput = kind === 'ONCE'
+      ? { kind, windowMinutesBefore: 0, windowMinutesAfter, estimatedArrivalMinutes: estimatedArrivalMinutes ? Number(estimatedArrivalMinutes) : null, arrivalToleranceMinutes, active: true }
+      : { kind, days, time, windowMinutesBefore: 15, windowMinutesAfter,
+          estimatedArrivalMinutes: estimatedArrivalMinutes ? Number(estimatedArrivalMinutes) : null, arrivalToleranceMinutes, active: true }
     try { onSaved(initial ? await updateSchedule(initial.id, data) : await createSchedule(routeId, data)) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo guardar el horario') }
     finally { setBusy(false) }
@@ -339,12 +379,24 @@ function ScheduleForm({ routeId, initial, onClose, onSaved }: { routeId: string,
   return <div className="modal-backdrop" role="presentation"><div className="sheet schedule-sheet" role="dialog" aria-modal="true" aria-labelledby="schedule-title">
     <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">HORARIO</p><h1 id="schedule-title">{initial ? 'Editar horario' : 'Nuevo horario'}</h1></div><span /></div>
     <form onSubmit={submit}>
-      <fieldset><legend>Días</legend><div className="days">{ALL_DAYS.map(day => <button type="button" key={day} className={days.includes(day) ? 'selected' : ''} onClick={() => toggleDay(day)}>{DAY_NAMES[day]}</button>)}</div></fieldset>
-      <label>Hora de salida<input required type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
+      {!initial && <fieldset><legend>Cuándo</legend><div className="option-toggle">
+        <button type="button" className={kind === 'WEEKLY' ? 'selected' : ''} onClick={() => setKind('WEEKLY')}>Recurrente</button>
+        <button type="button" className={kind === 'ONCE' ? 'selected' : ''} onClick={() => setKind('ONCE')}>Ahora mismo</button>
+      </div></fieldset>}
+      {kind === 'WEEKLY'
+        ? <>
+            <fieldset><legend>Días</legend><div className="days">{ALL_DAYS.map(day => <button type="button" key={day} className={days.includes(day) ? 'selected' : ''} onClick={() => toggleDay(day)}>{DAY_NAMES[day]}</button>)}</div></fieldset>
+            <label>Hora de salida<input required type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
+            <label>Avisar si no ha salido (minutos tras la hora)<input required type="number" min={0} max={180} value={windowMinutesAfter} onChange={e => setWindowMinutesAfter(Number(e.target.value))} /></label>
+          </>
+        : <>
+            <p className="lede-note">Empieza a seguirse el trayecto en cuanto guardes, sin esperar a ningún día ni hora concretos.</p>
+            <label>Avisar si no ha salido (minutos desde ahora)<input required type="number" min={5} max={120} value={windowMinutesAfter} onChange={e => setWindowMinutesAfter(Number(e.target.value))} /></label>
+          </>}
       <label>Duración estimada del trayecto en minutos (opcional)<input type="number" min={1} max={240} value={estimatedArrivalMinutes} onChange={e => setEstimatedArrivalMinutes(e.target.value)} placeholder="Ej. 20" /></label>
       {estimatedArrivalMinutes && <label>Avisar si tarda más de (minutos extra)<input type="number" min={5} max={120} value={arrivalToleranceMinutes} onChange={e => setArrivalToleranceMinutes(Number(e.target.value))} /></label>}
       {error && <div className="form-error">{error}</div>}
-      <button className="primary" type="submit" disabled={busy}><Check /> {busy ? 'Guardando…' : 'Guardar horario'}</button>
+      <button className="primary" type="submit" disabled={busy}><Check /> {busy ? 'Guardando…' : kind === 'ONCE' ? 'Empezar ahora' : 'Guardar horario'}</button>
     </form>
   </div></div>
 }

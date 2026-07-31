@@ -14,25 +14,25 @@ enum Role {
 }
 
 model User {
-  id                   String    @id @default(uuid())
-  email                String    @unique
+  id                   String             @id @default(uuid())
+  email                String             @unique
   name                 String
-  passwordHash         String    @map("password_hash")
-  role                 Role      @default(USUARIO)
-  active               Boolean   @default(true)
-  privacyAcceptedAt    DateTime? @map("privacy_accepted_at")
-  consentVersion       String?   @map("consent_version")
-  timezone             String    @default("Europe/Madrid")
-  pairingCode          String?   @unique @map("pairing_code")
-  pairingCodeExpiresAt DateTime? @map("pairing_code_expires_at")
-  createdAt            DateTime  @default(now()) @map("created_at")
-  updatedAt            DateTime  @updatedAt @map("updated_at")
+  passwordHash         String             @map("password_hash")
+  role                 Role               @default(USUARIO)
+  active               Boolean            @default(true)
+  privacyAcceptedAt    DateTime?          @map("privacy_accepted_at")
+  consentVersion       String?            @map("consent_version")
+  timezone             String             @default("Europe/Madrid")
+  pairingCode          String?            @unique @map("pairing_code")
+  pairingCodeExpiresAt DateTime?          @map("pairing_code_expires_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
   pushSubscriptions    PushSubscription[]
   fcmTokens            FcmToken[]
-  tutorLinks           Link[]    @relation("TutorLinks")
-  usuarioLinks         Link[]    @relation("UsuarioLinks")
-  tutorRoutes          Route[]   @relation("TutorRoutes")
-  usuarioRoutes        Route[]   @relation("UsuarioRoutes")
+  tutorLinks           Link[]             @relation("TutorLinks")
+  usuarioLinks         Link[]             @relation("UsuarioLinks")
+  tutorRoutes          Route[]            @relation("TutorRoutes")
+  usuarioRoutes        Route[]            @relation("UsuarioRoutes")
 
   @@map("users")
 }
@@ -49,12 +49,18 @@ model Link {
   @@map("links")
 }
 
+enum TravelMode {
+  WALK
+  CAR
+}
+
 model Route {
   id                  String     @id @default(uuid())
   tutorId             String     @map("tutor_id")
   usuarioId           String     @map("usuario_id")
   label               String
   points              Json
+  mode                TravelMode @default(WALK)
   corridorWidthMeters Int        @default(75) @map("corridor_width_meters")
   active              Boolean    @default(true)
   createdAt           DateTime   @default(now()) @map("created_at")
@@ -69,18 +75,24 @@ model Route {
   @@map("routes")
 }
 
+enum ScheduleKind {
+  WEEKLY
+  ONCE
+}
+
 model Schedule {
-  id                      String   @id @default(uuid())
-  routeId                 String   @map("route_id")
-  route                   Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  id                      String       @id @default(uuid())
+  routeId                 String       @map("route_id")
+  route                   Route        @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  kind                    ScheduleKind @default(WEEKLY)
   days                    Int[]
   time                    String
-  windowMinutesBefore     Int      @default(15) @map("window_minutes_before")
-  windowMinutesAfter      Int      @default(45) @map("window_minutes_after")
-  estimatedArrivalMinutes Int?     @map("estimated_arrival_minutes")
-  arrivalToleranceMinutes Int      @default(20) @map("arrival_tolerance_minutes")
-  active                  Boolean  @default(true)
-  createdAt               DateTime @default(now()) @map("created_at")
+  windowMinutesBefore     Int          @default(15) @map("window_minutes_before")
+  windowMinutesAfter      Int          @default(45) @map("window_minutes_after")
+  estimatedArrivalMinutes Int?         @map("estimated_arrival_minutes")
+  arrivalToleranceMinutes Int          @default(20) @map("arrival_tolerance_minutes")
+  active                  Boolean      @default(true)
+  createdAt               DateTime     @default(now()) @map("created_at")
   trips                   Trip[]
 
   @@index([routeId])

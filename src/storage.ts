@@ -1,4 +1,4 @@
-import type { LinkedUsuario, Route, Schedule, UserAccount } from './types'
+import type { LatLng, LinkedUsuario, Route, Schedule, TravelMode, UserAccount } from './types'
 import { Capacitor } from '@capacitor/core'
 
 const TOKEN_KEY = 'rutasegura:session-token:v1'
@@ -84,13 +84,19 @@ export const unlinkUsuario = (usuarioId: string) => request<{ ok: boolean }>(`/a
 
 export const loadRoutes = () => request<Route[]>('/api/routes')
 export const loadMyRoutes = () => request<Route[]>('/api/routes/mine')
-export type RouteInput = { usuarioId: string, label: string, points: { lat: number, lng: number }[], corridorWidthMeters: number }
-export type RouteUpdateInput = { label: string, points: { lat: number, lng: number }[], corridorWidthMeters: number, active: boolean }
+export type RouteInput = { usuarioId: string, label: string, points: { lat: number, lng: number }[], mode: TravelMode, corridorWidthMeters: number }
+export type RouteUpdateInput = { label: string, points: { lat: number, lng: number }[], mode: TravelMode, corridorWidthMeters: number, active: boolean }
 export const createRoute = (data: RouteInput) => request<Route>('/api/routes', { method: 'POST', body: JSON.stringify(data) })
 export const updateRoute = (id: string, data: RouteUpdateInput) => request<Route>(`/api/routes/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 export const deleteRoute = (id: string) => request<{ ok: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }).then(() => undefined)
 
-export type ScheduleInput = Omit<Schedule, 'id' | 'routeId'>
+export type DirectionsConfig = { enabled: boolean }
+export const getDirectionsConfig = () => request<DirectionsConfig>('/api/routes/directions/config')
+export type DirectionsResult = { points: LatLng[], distanceMeters: number | null, durationSeconds: number | null }
+export const calculateDirections = (mode: TravelMode, origin: LatLng, destination: LatLng) =>
+  request<DirectionsResult>('/api/routes/directions', { method: 'POST', body: JSON.stringify({ mode, origin, destination }) })
+
+export type ScheduleInput = Omit<Schedule, 'id' | 'routeId' | 'days' | 'time'> & { days?: Schedule['days'], time?: Schedule['time'] }
 export const createSchedule = (routeId: string, data: ScheduleInput) => request<Schedule>(`/api/routes/${routeId}/schedules`, { method: 'POST', body: JSON.stringify(data) })
 export const updateSchedule = (id: string, data: ScheduleInput) => request<Schedule>(`/api/schedules/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 export const deleteSchedule = (id: string) => request<{ ok: boolean }>(`/api/schedules/${id}`, { method: 'DELETE' }).then(() => undefined)
