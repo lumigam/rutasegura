@@ -258,17 +258,28 @@ export function RoutesView() {
       {usuarios.length > 0 && <button className="primary compact" onClick={() => setEditing('new')}><Plus /> Añadir</button>}
     </div>
     {error && <div className="form-error">{error}</div>}
-    <PairingCard role="TUTOR" onLinked={refresh} />
-    {loaded && usuarios.length === 0 && <p className="lede-note">Vincula primero a una persona usuaria para poder crear una ruta.</p>}
-    {usuarios.length > 0 && <LinkedUsuariosList usuarios={usuarios} onChange={refresh} />}
-    {routes.length > 0 && <div className="route-list">
-      {routes.map(route => <button className="route-row" key={route.id} onClick={() => setViewing(route)}>
-        <span className="route-row-icon"><MapPin /></span>
-        <span className="route-row-text"><strong>{route.label}</strong><small>{usuarios.find(u => u.id === route.usuarioId)?.name ?? 'Persona usuaria'} · {route.mode === 'CAR' ? 'en coche' : 'a pie'} · {route.schedules.length ? route.schedules.map(scheduleSummary).join(' · ') : 'sin horario'}</small></span>
-        <ChevronRight />
-      </button>)}
-    </div>}
-    {loaded && routes.length === 0 && usuarios.length > 0 && <div className="large-empty"><MapPin /><h2>Aún no hay rutas</h2><p>Añade la primera para empezar a recibir avisos.</p><button className="primary" onClick={() => setEditing('new')}><Plus /> Añadir ruta</button></div>}
+
+    {/* Pairing only leads when there is nobody linked yet — after that it is rare housekeeping,
+        so the routes the tutor actually works with every day come first. */}
+    {loaded && usuarios.length === 0 && <>
+      <p className="lede-note">Vincula primero a una persona usuaria para poder crear una ruta.</p>
+      <PairingCard role="TUTOR" onLinked={refresh} />
+    </>}
+
+    {usuarios.length > 0 && <>
+      {routes.length > 0 && <div className="route-list">
+        {routes.map(route => <button className="route-row" key={route.id} onClick={() => setViewing(route)}>
+          <span className="route-row-icon"><MapPin /></span>
+          <span className="route-row-text"><strong>{route.label}</strong><small>{usuarios.find(u => u.id === route.usuarioId)?.name ?? 'Persona usuaria'} · {route.mode === 'CAR' ? 'en coche' : 'a pie'} · {route.schedules.length ? route.schedules.map(scheduleSummary).join(' · ') : 'sin horario'}</small></span>
+          <ChevronRight />
+        </button>)}
+      </div>}
+      {loaded && routes.length === 0 && <div className="large-empty"><MapPin /><h2>Aún no hay rutas</h2><p>Añade la primera para empezar a recibir avisos.</p><button className="primary" onClick={() => setEditing('new')}><Plus /> Añadir ruta</button></div>}
+
+      <div className="section-divider"><span>VINCULACIÓN</span></div>
+      <LinkedUsuariosList usuarios={usuarios} onChange={refresh} />
+      <PairingCard role="TUTOR" onLinked={refresh} />
+    </>}
     {viewing && !editing && <RouteDetail
       route={viewing}
       usuario={usuarios.find(u => u.id === viewing.usuarioId)}
