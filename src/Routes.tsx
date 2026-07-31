@@ -19,7 +19,7 @@ const ALL_DAYS: Weekday[] = [0, 1, 2, 3, 4, 5, 6]
 const PLASENCIA: LatLng = { lat: 40.0298, lng: -6.0844 }
 
 type SearchResult = { lat: string, lon: string, display_name: string, type: string }
-type MapMarker = { point: LatLng, label: string }
+type MapMarker = { point: LatLng, label: string, tone?: 'live' }
 type ResultAction = { label: string, onPick: (point: LatLng, name: string) => void }
 
 /** Leaflet stroke width is in pixels, so a corridor expressed in metres has to be re-derived whenever the zoom changes. */
@@ -28,9 +28,9 @@ function corridorPixelWidth(map: L.Map, meters: number, lat: number) {
   return Math.min(Math.max((meters * 2) / metersPerPixel, 11), 1000)
 }
 
-function RouteMap({ points, markers, corridorWidthMeters, editable, onAddPoint, resultActions }: {
+function RouteMap({ points, markers, corridorWidthMeters, editable, onAddPoint, resultActions, focus }: {
   points: LatLng[], markers: MapMarker[], corridorWidthMeters: number,
-  editable: boolean, onAddPoint?: (point: LatLng) => void, resultActions?: ResultAction[],
+  editable: boolean, onAddPoint?: (point: LatLng) => void, resultActions?: ResultAction[], focus?: LatLng | null,
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
@@ -86,7 +86,11 @@ function RouteMap({ points, markers, corridorWidthMeters, editable, onAddPoint, 
       }
       markers.forEach(marker => {
         L.marker([marker.point.lat, marker.point.lng], {
-          icon: L.divIcon({ className: 'route-pin', html: `<span>${marker.label}</span>`, iconSize: [28, 28], iconAnchor: [14, 14] }),
+          icon: L.divIcon({
+            className: marker.tone === 'live' ? 'route-pin route-pin-live' : 'route-pin',
+            html: `<span>${marker.label}</span>`, iconSize: [28, 28], iconAnchor: [14, 14],
+          }),
+          zIndexOffset: marker.tone === 'live' ? 1000 : 0,
         }).addTo(layer)
       })
     }
@@ -94,6 +98,12 @@ function RouteMap({ points, markers, corridorWidthMeters, editable, onAddPoint, 
     map.on('zoomend', draw)
     return () => { map.off('zoomend', draw) }
   }, [points, markers, corridorWidthMeters])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !focus) return
+    map.setView([focus.lat, focus.lng], Math.max(map.getZoom(), 16))
+  }, [focus?.lat, focus?.lng])
 
   const fittedRef = useRef('')
   useEffect(() => {
@@ -197,44 +207,59 @@ function LinkedUsuariosList({ usuarios, onChange }: { usuarios: LinkedUsuario[],
   </section>
 }
 
-function LiveLocationModal({ usuario, onClose }: { usuario: LinkedUsuario, onClose: () => void }) {
-  const [state, setState] = useState<'requesting' | 'pending' | 'done' | 'expired' | 'error'>('requesting')
-  const containerRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<L.Map | null>(null)
+type LiveState = 'idle' | 'requesting' | 'pending' | 'done' | 'expired' | 'error'
+
+/** Asks the tracked person's device for one fresh fix and polls until it answers or the request expires. */
+function useLiveLocation(usuarioId: string | undefined, active: boolean) {
+  const [state, setState] = useState<LiveState>('idle')
+  const [point, setPoint] = useState<LatLng | null>(null)
 
   useEffect(() => {
+    if (!active || !usuarioId) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
+    setState('requesting'); setPoint(null)
     const poll = async (requestId: string) => {
       if (cancelled) return
       try {
         const result = await pollLiveLocation(requestId)
         if (cancelled) return
         if (result.status === 'done' && result.lat != null && result.lng != null) {
+          setPoint({ lat: result.lat, lng: result.lng })
           setState('done')
-          if (containerRef.current && !mapRef.current) {
-            const map = L.map(containerRef.current, { center: [result.lat, result.lng], zoom: 16 })
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map)
-            L.marker([result.lat, result.lng]).addTo(map)
-            mapRef.current = map
-          }
           return
         }
         if (result.status === 'expired') { setState('expired'); return }
         timer = setTimeout(() => poll(requestId), 2000)
       } catch { if (!cancelled) setState('error') }
     }
-    requestLiveLocation(usuario.id).then(({ requestId }) => { if (!cancelled) { setState('pending'); timer = setTimeout(() => poll(requestId), 1500) } })
+    requestLiveLocation(usuarioId)
+      .then(({ requestId }) => { if (!cancelled) { setState('pending'); timer = setTimeout(() => poll(requestId), 1500) } })
       .catch(() => { if (!cancelled) setState('error') })
-    return () => { cancelled = true; clearTimeout(timer); mapRef.current?.remove(); mapRef.current = null }
-  }, [usuario.id])
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [usuarioId, active])
 
+  return { state, point }
+}
+
+function LiveStateNote({ state }: { state: LiveState }) {
+  if (state === 'requesting' || state === 'pending') return <p className="lede-note">Pidiendo su ubicación… puede tardar unos segundos.</p>
+  if (state === 'expired') return <div className="form-error">No ha respondido a tiempo. Puede que tenga la aplicación cerrada, sin conexión o sin permiso de ubicación.</div>
+  if (state === 'error') return <div className="form-error">No se ha podido pedir la ubicación.</div>
+  return null
+}
+
+function LiveLocationModal({ usuario, onClose }: { usuario: LinkedUsuario, onClose: () => void }) {
+  const { state, point } = useLiveLocation(usuario.id, true)
   return <div className="modal-backdrop" role="presentation"><div className="sheet" role="dialog" aria-modal="true" aria-labelledby="live-title">
     <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">VER AHORA</p><h1 id="live-title">{usuario.name}</h1></div><span /></div>
-    {(state === 'requesting' || state === 'pending') && <p className="lede-note">Pidiendo su ubicación… puede tardar unos segundos.</p>}
-    {state === 'done' && <div ref={containerRef} className="route-map" />}
-    {state === 'expired' && <div className="form-error">No ha respondido a tiempo. Puede que tenga la aplicación cerrada o sin conexión.</div>}
-    {state === 'error' && <div className="form-error">No se ha podido pedir la ubicación.</div>}
+    <div className="route-editor-body">
+      <LiveStateNote state={state} />
+      {point && <>
+        <p className="lede-note" style={{ padding: '0 0 10px', textAlign: 'left' }}>Ubicación recibida ahora mismo.</p>
+        <RouteMap points={[]} markers={[{ point, label: '●', tone: 'live' }]} corridorWidthMeters={0} editable={false} focus={point} />
+      </>}
+    </div>
   </div></div>
 }
 
@@ -312,15 +337,20 @@ function RouteDetail({ route, usuario, onClose, onEdit }: { route: Route, usuari
   const [loading, setLoading] = useState(true)
   const [liveEnabled, setLiveEnabled] = useState(false)
   const [showLive, setShowLive] = useState(false)
+  const { state: liveState, point: livePoint } = useLiveLocation(usuario?.id, showLive)
 
   useEffect(() => { loadRouteActivity(route.id).then(setActivity).catch(() => undefined).finally(() => setLoading(false)) }, [route.id])
   useEffect(() => { getLiveConfig().then(c => setLiveEnabled(c.enabled)).catch(() => undefined) }, [])
 
   const trip = activity?.trips[0]
   const status = trip ? TRIP_STATUS[trip.status] : null
-  const markers: MapMarker[] = route.points.length > 1
-    ? [{ point: route.points[0], label: 'A' }, { point: route.points[route.points.length - 1], label: 'B' }]
-    : []
+  const markers: MapMarker[] = [
+    ...(route.points.length > 1
+      ? [{ point: route.points[0], label: 'A' }, { point: route.points[route.points.length - 1], label: 'B' }]
+      : []),
+    // Drawn on top of the route so the tutor can see the position relative to the corridor.
+    ...(livePoint ? [{ point: livePoint, label: '●', tone: 'live' as const }] : []),
+  ]
 
   return <div className="modal-backdrop" role="presentation"><div className="sheet route-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
     <div className="sheet-head"><button onClick={onClose} aria-label="Cerrar"><X /></button><div><p className="eyebrow">RUTA</p><h1 id="detail-title">{route.label}</h1></div><span /></div>
@@ -336,11 +366,16 @@ function RouteDetail({ route, usuario, onClose, onEdit }: { route: Route, usuari
             </div>
           : <div className="trip-status trip-idle"><strong>Sin actividad reciente</strong><small>Aquí verás lo que ocurra en el próximo trayecto.</small></div>}
 
-      {liveEnabled && usuario && <button type="button" className="primary" style={{ width: '100%', marginBottom: 18 }} onClick={() => setShowLive(true)}>
-        <Locate /> Ver dónde está ahora
+      {liveEnabled && usuario && <button
+        type="button" className={livePoint ? 'secondary-button' : 'primary'} style={{ width: '100%', marginBottom: 12 }}
+        disabled={liveState === 'requesting' || liveState === 'pending'}
+        onClick={() => { setShowLive(false); setTimeout(() => setShowLive(true), 0) }}>
+        <Locate /> {liveState === 'requesting' || liveState === 'pending' ? 'Pidiendo su ubicación…' : livePoint ? 'Actualizar su ubicación' : 'Ver dónde está ahora'}
       </button>}
+      {showLive && liveState !== 'done' && <LiveStateNote state={liveState} />}
+      {livePoint && <p className="live-note">● El punto verde es dónde está ahora ({livePoint.lat.toFixed(5)}, {livePoint.lng.toFixed(5)}).</p>}
 
-      <RouteMap points={route.points} markers={markers} corridorWidthMeters={route.corridorWidthMeters} editable={false} />
+      <RouteMap points={route.points} markers={markers} corridorWidthMeters={route.corridorWidthMeters} editable={false} focus={livePoint} />
 
       <h2 className="detail-heading">Horarios</h2>
       <div className="schedule-list">
@@ -363,7 +398,6 @@ function RouteDetail({ route, usuario, onClose, onEdit }: { route: Route, usuari
         <button type="button" className="primary" onClick={onEdit}>Editar ruta</button>
       </div>
     </div>
-    {showLive && usuario && <LiveLocationModal usuario={usuario} onClose={() => setShowLive(false)} />}
   </div></div>
 }
 
