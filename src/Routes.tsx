@@ -18,6 +18,8 @@ const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 const ALL_DAYS: Weekday[] = [0, 1, 2, 3, 4, 5, 6]
 const PLASENCIA: LatLng = { lat: 40.0298, lng: -6.0844 }
 
+type SearchResult = { lat: string, lon: string, display_name: string, type: string }
+
 function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { points: LatLng[], corridorWidthMeters: number, editable: boolean, onAddPoint?: (point: LatLng) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
@@ -27,18 +29,25 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [results, setResults] = useState<SearchResult[]>([])
 
   const search = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!query.trim() || searching) return
-    setSearching(true); setSearchError('')
+    setSearching(true); setSearchError(''); setResults([])
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`)
-      const results = await response.json() as { lat: string, lon: string }[]
-      if (!results.length) { setSearchError('No se ha encontrado ese lugar'); return }
-      mapRef.current?.setView([Number(results[0].lat), Number(results[0].lon)], 15)
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=es&limit=5&q=${encodeURIComponent(query)}`)
+      const found = await response.json() as SearchResult[]
+      if (!found.length) { setSearchError('No se ha encontrado ese lugar'); return }
+      setResults(found)
     } catch { setSearchError('No se pudo buscar el lugar') }
     finally { setSearching(false) }
+  }
+
+  const pickResult = (result: SearchResult) => {
+    const precise = ['house', 'building', 'residential', 'road', 'pedestrian', 'address'].includes(result.type)
+    mapRef.current?.setView([Number(result.lat), Number(result.lon)], precise ? 18 : 14)
+    setResults([])
   }
 
   useEffect(() => {
@@ -58,9 +67,13 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
     if (points.length) {
       const latlngs = points.map(p => [p.lat, p.lng]) as [number, number][]
       if (points.length > 1) L.polyline(latlngs, { color: '#3f74b3', weight: 4, opacity: .85 }).addTo(layer)
-      points.forEach(p => L.circle([p.lat, p.lng], { radius: corridorWidthMeters, color: '#3f74b3', weight: 1, opacity: .35, fillOpacity: .08 }).addTo(layer))
+      points.forEach((p, index) => {
+        L.circle([p.lat, p.lng], { radius: corridorWidthMeters, color: '#3f74b3', weight: 1, opacity: .35, fillOpacity: .08 }).addTo(layer)
+        const label = points.length === 2 ? (index === 0 ? 'Origen' : 'Destino') : String(index + 1)
+        L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'route-pin', html: `<span>${label}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }) }).addTo(layer)
+      })
       if (points.length > 1) map.fitBounds(latlngs, { padding: [30, 30] })
-      else map.setView(latlngs[0], 15)
+      else map.setView(latlngs[0], Math.max(map.getZoom(), 16))
     }
   }, [points, corridorWidthMeters])
 
@@ -70,6 +83,9 @@ function RouteMap({ points, corridorWidthMeters, editable, onAddPoint }: { point
       <button type="submit" disabled={searching}>{searching ? '…' : 'Buscar'}</button>
     </form>
     {searchError && <div className="form-error">{searchError}</div>}
+    {results.length > 0 && <ul className="search-results">
+      {results.map((result, index) => <li key={index}><button type="button" onClick={() => pickResult(result)}>{result.display_name}</button></li>)}
+    </ul>}
     <div ref={containerRef} className="route-map" style={{ cursor: editable ? 'crosshair' : 'grab' }} />
   </>
 }
@@ -237,15 +253,16 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
     if (!savedRouteId) setCorridorWidthMeters(next === 'CAR' ? 250 : 75)
   }
 
+  const [autoPicks, setAutoPicks] = useState<LatLng[]>([])
   const calculateAuto = async (origin: LatLng, destination: LatLng) => {
     setCalculating(true); setError('')
     try { setPoints((await calculateDirections(mode, origin, destination)).points) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo calcular la ruta entre esos dos puntos'); setPoints([origin, destination]) }
-    finally { setCalculating(false) }
+    finally { setCalculating(false); setAutoPicks([]) }
   }
   const addPoint = (point: LatLng) => {
     if (drawMode === 'manual') { setPoints(current => [...current, point]); return }
-    setPoints(current => {
+    setAutoPicks(current => {
       if (current.length >= 2) return [point]
       const next = [...current, point]
       if (next.length === 2) void calculateAuto(next[0], next[1])
@@ -253,8 +270,11 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
     })
   }
   const undoPoint = () => setPoints(current => current.slice(0, -1))
-  const clearPoints = () => setPoints([])
-  const switchDrawMode = (next: 'manual' | 'auto') => { setDrawMode(next); setPoints([]); setError('') }
+  const clearPoints = () => { setPoints([]); setAutoPicks([]) }
+  const switchDrawMode = (next: 'manual' | 'auto') => {
+    if (next === drawMode) return
+    setDrawMode(next); setPoints([]); setAutoPicks([]); setError('')
+  }
 
   const saveRoute = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -286,12 +306,14 @@ function RouteEditor({ initial, usuarios, onClose, onSaved }: { initial: Route |
       </div>}
       <p className="lede-note map-hint">{drawMode === 'manual'
         ? 'Busca el punto de partida y luego toca el mapa para ir marcando el camino, punto a punto.'
-        : `Toca el mapa para marcar primero el origen y después el destino — la app calculará el camino ${mode === 'CAR' ? 'en coche' : 'a pie'} entre los dos.`}</p>
-      {calculating && <p className="lede-note">Calculando ruta…</p>}
-      <RouteMap points={points} corridorWidthMeters={corridorWidthMeters} editable onAddPoint={addPoint} />
+        : calculating ? 'Calculando la ruta entre los dos puntos…'
+        : autoPicks.length === 0 ? `Toca el mapa para marcar el origen (a pie o en coche: ${mode === 'CAR' ? 'en coche' : 'a pie'}).`
+        : autoPicks.length === 1 ? 'Origen marcado. Ahora toca el mapa para marcar el destino.'
+        : 'Ruta calculada. Puedes guardarla o volver a marcar los puntos.'}</p>
+      <RouteMap points={drawMode === 'auto' && (autoPicks.length > 0 || calculating) ? autoPicks : points} corridorWidthMeters={corridorWidthMeters} editable onAddPoint={addPoint} />
       <div className="route-map-actions">
-        <button type="button" className="text-button" onClick={undoPoint} disabled={!points.length}>{drawMode === 'manual' ? 'Deshacer último punto' : 'Empezar de nuevo'}</button>
-        <button type="button" className="text-button" onClick={clearPoints} disabled={!points.length}>Borrar ruta</button>
+        <button type="button" className="text-button" onClick={drawMode === 'manual' ? undoPoint : () => setAutoPicks([])} disabled={drawMode === 'manual' ? !points.length : !autoPicks.length}>{drawMode === 'manual' ? 'Deshacer último punto' : 'Empezar de nuevo'}</button>
+        <button type="button" className="text-button" onClick={clearPoints} disabled={!points.length && !autoPicks.length}>Borrar ruta</button>
       </div>
       <form onSubmit={saveRoute}>
         <label>Nombre de la ruta<input required value={label} onChange={e => setLabel(e.target.value)} placeholder="Ej. Centro de día → Casa" /></label>

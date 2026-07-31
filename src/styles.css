@@ -205,8 +205,12 @@ legend { margin-bottom: 11px; padding: 0; font-size: 12.5px; font-weight: 600; c
 .map-search input { margin-top: 0; flex: 1; }
 .map-search button { flex: 0 0 auto; border: 0; background: var(--brand); color: white; border-radius: 12px; padding: 0 18px; font-weight: 600; }
 .map-search button:disabled { opacity: .6; }
-.route-map { height: 260px; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); margin-bottom: 10px; }
+.search-results { list-style: none; margin: -4px 0 10px; padding: 6px; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: 12px; max-height: 180px; overflow: auto; background: var(--surface); }
+.search-results button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 8px; font-size: 13px; color: var(--ink); }
+.search-results button:hover { background: var(--brand-light); }
+.route-map { height: 420px; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); margin-bottom: 10px; }
 .route-map-actions { display: flex; gap: 16px; margin-bottom: 20px; }
+.route-pin span { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--brand); color: white; font-size: 10px; font-weight: 700; border: 2px solid white; box-shadow: 0 2px 8px #00000055; }
 .route-list { background: var(--surface); border: 1px solid var(--line); border-radius: 19px; overflow: hidden; margin-top: 18px; }
 .route-row { width: 100%; display: grid; grid-template-columns: 40px 1fr auto; gap: 14px; align-items: center; padding: 16px 18px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .route-row:last-child { border-bottom: 0; }

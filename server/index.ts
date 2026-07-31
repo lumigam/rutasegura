@@ -307,7 +307,12 @@ app.post('/api/routes/directions', authenticate, consentRequired, tutorOnly, asy
       ] }),
     })
   } catch { return res.status(502).json({ error: 'No se pudo contactar con el servicio de rutas' }) }
-  if (!orsResponse.ok) return res.status(502).json({ error: 'No se ha podido calcular una ruta entre esos dos puntos' })
+  if (!orsResponse.ok) {
+    const body = await orsResponse.text()
+    console.error(`OpenRouteService devolvió ${orsResponse.status}:`, body)
+    const reason = (() => { try { return JSON.parse(body)?.error?.message || JSON.parse(body)?.error } catch { return null } })()
+    return res.status(502).json({ error: reason ? `No se ha podido calcular la ruta: ${reason}` : 'No se ha podido calcular una ruta entre esos dos puntos' })
+  }
   const geojson = await orsResponse.json() as { features?: { geometry?: { coordinates?: [number, number][] }, properties?: { summary?: { distance?: number, duration?: number } } }[] }
   const coordinates = geojson.features?.[0]?.geometry?.coordinates
   if (!coordinates?.length) return res.status(502).json({ error: 'No se ha podido calcular una ruta entre esos dos puntos' })
